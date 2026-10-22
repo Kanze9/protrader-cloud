@@ -27,7 +27,7 @@ def alert_lot() -> float:
 
 
 def send_email(subject: str, text: str, html_body: Optional[str] = None) -> None:
-    user, pw = os.getenv("GMAIL_USER", ""), os.getenv("GMAIL_APP_PASSWORD", "")
+    user, pw = os.getenv("GMAIL_USER", "").strip(), os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
     if not user or not pw:
         raise RuntimeError("Gmail is not set up - run set_email.py first.")
     msg = EmailMessage()
