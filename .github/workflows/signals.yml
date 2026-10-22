@@ -24,11 +24,11 @@ jobs:
       - run: pip install -r requirements-cloud.txt
       - run: python -W ignore cloud_job.py
         env:
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
-          ALERT_LOT: ${{ secrets.ALERT_LOT }}
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USER: ${{ secrets.FTP_USER }}
-          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          PAGE_NAME: ${{ secrets.PAGE_NAME }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER || vars.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD || vars.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO || vars.ALERT_EMAIL_TO }}
+          ALERT_LOT: ${{ secrets.ALERT_LOT || vars.ALERT_LOT }}
+          FTP_HOST: ${{ secrets.FTP_HOST || vars.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER || vars.FTP_USER }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || vars.FTP_PASSWORD }}
+          PAGE_NAME: ${{ secrets.PAGE_NAME || vars.PAGE_NAME }}
