@@ -1,4 +1,4 @@
-"""One hourly run in the cloud (GitHub Actions): check EURUSD, email new signals / TP1 / exits, and upload a
+"""One hourly run in the cloud (GitHub Actions): check EURUSD and gold, email new signals / TP1 / exits, and upload a
 signal page to the InfinityFree site by FTP.   Local preview:  .venv\\Scripts\\python cloud_job.py --local
 
 Environment (GitHub secrets): GMAIL_USER, GMAIL_APP_PASSWORD, ALERT_EMAIL_TO, ALERT_LOT, FTP_HOST, FTP_USER, FTP_PASSWORD.
@@ -19,9 +19,15 @@ from config import INSTRUMENTS
 from notify import email_ready, send_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SYM = aw.SYM
-D = INSTRUMENTS[SYM].digits
-PIP = INSTRUMENTS[SYM].pip
+COST_NOTE = {"EURUSD": "assumes ~0.9 pip cost (Razor)", "XAUUSD": "assumes ~$0.25/oz cost (Razor)"}
+CSS = """body{margin:0;background:#070b14;color:#dbe6f5;font-family:-apple-system,Segoe UI,Arial,sans-serif}
+.w{max-width:720px;margin:auto;padding:16px}h1{font-size:20px;letter-spacing:.08em;color:#4dd8ff;margin:4px 0 2px}
+h2{font-size:17px;letter-spacing:.06em;color:#4dd8ff;margin:22px 0 0}
+.m{color:#7d8ca3;font-size:13px}.card{background:#0d1524;border:1px solid #1f2d44;border-radius:12px;padding:14px;margin:12px 0}
+.big{font-size:30px;font-weight:700;margin:4px 0}.buy{color:#00e5c0}.sell{color:#ff4d6d}.wait{color:#ffb547}
+table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 4px;border-bottom:1px solid #16233a}
+td.r{text-align:right;color:#9fb0c8}.mono{font-family:Menlo,Consolas,monospace}.ok{color:#00e5c0}.bad{color:#ff4d6d}
+td{overflow-wrap:anywhere}@media(max-width:480px){h1{font-size:17px}.big{font-size:24px}table{font-size:13px}.w{padding:12px}}"""
 
 
 def ftp():
@@ -54,39 +60,34 @@ def upload_ftp(page: str, state: dict):
         f.storbinary(f"STOR {os.environ.get('PAGE_NAME') or 'index.html'}", io.BytesIO(page.encode("utf-8")))
 
 
-def fmt(x):
-    return f"{x:,.{D}f}"
-
-
-def wait_reason(m: dict) -> str:
+def wait_reason(sym: str, strat: str, m: dict) -> str:
+    peer = {s: p for _, s, p in aw.MARKETS}.get(strat, "")
+    if strat == "mr_gold" and (not m["uptrend"] or m.get("dtrend") != 1):
+        return "Gold buys dips only while the daily and H1 trends are both up - not the case now, so it waits."
     if not m.get("calm", True):
         return "A news-spike candle printed in the last 3 hours - waiting for the market to calm down."
     if m.get("breakdown"):
         return "Price just broke the last 30 candles' range (LL/BOS) - a structure break, not a dip. Waiting."
     if m.get("usd_wide") is not None and not m["usd_wide"] < meanrev.USD_WIDE_MAX:
-        return "The whole US dollar is moving (GBPUSD moved as much as EURUSD) - waiting."
+        return f"The whole US dollar is moving ({peer} moved as much as {sym}) - waiting."
+    if strat == "mr_gold":
+        return f"Uptrend on H1 and daily: waiting to BUY a deep dip (RSI(2) under 2). Now RSI(2) {m['level']:.0f}."
     if m["uptrend"]:
         return (f"Uptrend: waiting to BUY a dip (RSI(2) under 2, or 2-candle RSI(2) sum under 10). "
                 f"Now RSI(2) {m['level']:.0f}, 2-candle {m['cum2']:.0f}.")
     return f"Downtrend: waiting to SELL a sharp rally (RSI(2) above 98). Now RSI(2) {m['level']:.0f}."
 
 
-def render(trades, chk, stats, peer_ok) -> str:
-    now = pd.Timestamp.now(tz="UTC")
+def section(sym: str, strat: str, peer_sym: str, trades, chk, stats, peer_ok) -> str:
+    inst = INSTRUMENTS[sym]
+    fmt = lambda x: f"{x:,.{inst.digits}f}"
     last = trades[-1] if trades else None
     open_t = last if last and last.get("open") else None
-    css = """body{margin:0;background:#070b14;color:#dbe6f5;font-family:-apple-system,Segoe UI,Arial,sans-serif}
-.w{max-width:720px;margin:auto;padding:16px}h1{font-size:20px;letter-spacing:.08em;color:#4dd8ff;margin:4px 0 2px}
-.m{color:#7d8ca3;font-size:13px}.card{background:#0d1524;border:1px solid #1f2d44;border-radius:12px;padding:14px;margin:12px 0}
-.big{font-size:30px;font-weight:700;margin:4px 0}.buy{color:#00e5c0}.sell{color:#ff4d6d}.wait{color:#ffb547}
-table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 4px;border-bottom:1px solid #16233a}
-td.r{text-align:right;color:#9fb0c8}.mono{font-family:Menlo,Consolas,monospace}.ok{color:#00e5c0}.bad{color:#ff4d6d}
-td{overflow-wrap:anywhere}@media(max-width:480px){h1{font-size:17px}.big{font-size:24px}table{font-size:13px}.w{padding:12px}}"""
     if open_t:
         buy = open_t["side"] == 1
         cls, word = ("buy", "BUY (LONG)") if buy else ("sell", "SELL (SHORT)")
         e, s0 = open_t["entry"], open_t["stop0"]
-        pips = lambda v: abs(v - e) / PIP
+        pips = lambda v: abs(v - e) / inst.pip
         rows = [("Entry", fmt(e), f"{open_t['time'] + pd.Timedelta(hours=1):%m-%d %H:%M} UTC"),
                 ("Stop loss", fmt(open_t.get("stop_now", s0)), f"-{pips(s0):.0f} pips" +
                  (" · moved to breakeven" if open_t.get("tp1_time") is not None else ""))]
@@ -102,43 +103,63 @@ td{overflow-wrap:anywhere}@media(max-width:480px){h1{font-size:17px}.big{font-si
                 "<table>" + "".join(f"<tr><td>{k}</td><td class='mono'><b>{v}</b></td><td class='r'>{html.escape(n)}</td></tr>"
                                     for k, v, n in rows) + "</table>")
     else:
-        body = f"<div class='big wait'>WAIT</div><div>{html.escape(wait_reason(chk))}</div>"
-    checks = [("Trend (200-average)", True, "buy dips" if chk["uptrend"] else "sell rallies"),
-              ("No news spike (last 3 candles)", chk["calm"], f"{chk['spike']:.1f}×ATR"),
-              ("No structure break (30 candles)", not chk.get("breakdown"), "clear" if not chk.get("breakdown") else "break"),
-              ("EUR-only move (GBPUSD check)", chk.get("usd_wide") is None or chk["usd_wide"] < meanrev.USD_WIDE_MAX,
-               "no GBPUSD data" if not peer_ok or chk.get("usd_wide") is None else f"{chk['usd_wide']:.2f} / <{meanrev.USD_WIDE_MAX}")]
+        body = f"<div class='big wait'>WAIT</div><div>{html.escape(wait_reason(sym, strat, chk))}</div>"
+    if strat == "mr_gold":
+        checks = [("H1 uptrend (200-average)", chk["uptrend"], "yes" if chk["uptrend"] else "no"),
+                  ("Daily uptrend (50-day average)", chk.get("dtrend") == 1, "yes" if chk.get("dtrend") == 1 else "no")]
+    else:
+        checks = [("Trend (200-average)", True, "buy dips" if chk["uptrend"] else "sell rallies")]
+    checks += [("No news spike (last 3 candles)", chk["calm"], f"{chk['spike']:.1f}×ATR"),
+               ("No structure break (30 candles)", not chk.get("breakdown"), "clear" if not chk.get("breakdown") else "break"),
+               (f"{sym[:3] if sym != 'XAUUSD' else 'Gold'}-only move ({peer_sym} check)",
+                chk.get("usd_wide") is None or chk["usd_wide"] < meanrev.USD_WIDE_MAX,
+                f"no {peer_sym} data" if not peer_ok or chk.get("usd_wide") is None else f"{chk['usd_wide']:.2f} / <{meanrev.USD_WIDE_MAX}")]
     chk_html = "".join(f"<tr><td>{n}</td><td class='r {'ok' if ok else 'bad'}'>{'✓' if ok else '✗'} {html.escape(v)}</td></tr>"
                        for n, ok, v in checks)
-    hist = [t for t in trades if not t.get("open")][-12:][::-1]
+    hist = [t for t in trades if not t.get("open")][-8:][::-1]
     hist_html = "".join(
         f"<tr><td>{t['time'] + pd.Timedelta(hours=1):%m-%d %H:%M}</td><td class='{'buy' if t['side'] == 1 else 'sell'}'>"
         f"{'BUY' if t['side'] == 1 else 'SELL'}</td><td class='m'>{html.escape(t.get('tier') or '')}</td>"
         f"<td class='r {'ok' if t['r'] > 0 else 'bad'}'>{t['r']:+.2f}R</td></tr>" for t in hist)
     tested = (f"{stats['n']} trades · win {stats['win']:.0f}% · PF {stats['pf']:.2f} (older {stats.get('pf_train', 0):.2f} / "
-              f"newer {stats.get('pf_test', 0):.2f}) · 10 years · assumes ~0.9 pip cost (Razor)" if stats else "")
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="300">
-<meta name="robots" content="noindex,nofollow"><title>ProTrader · EURUSD</title><style>{css}</style></head><body><div class="w">
-<h1>◆ PROTRADER · EURUSD</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · last H1 close {fmt(chk['price'])} at
-{chk['time'] + pd.Timedelta(hours=1):%H:%M} UTC · refreshes every hour</div>
+              f"newer {stats.get('pf_test', 0):.2f}) · 10 years · {COST_NOTE.get(sym, '')}" if stats else "")
+    return f"""<h2>{'GOLD · XAUUSD' if sym == 'XAUUSD' else sym}</h2>
+<div class="m">last H1 close {fmt(chk['price'])} at {chk['time'] + pd.Timedelta(hours=1):%H:%M} UTC</div>
 <div class="card">{body}</div>
 <div class="card"><b>Checklist</b><table>{chk_html}</table></div>
-<div class="card"><b>Last signals</b><table>{hist_html or "<tr><td>none in the loaded history</td></tr>"}</table></div>
-<div class="card m">Tested: {html.escape(tested)}<br>Testing / education only. Not financial advice.</div>
+<div class="card"><b>Last signals</b><table>{hist_html or "<tr><td>none in the loaded history</td></tr>"}</table>
+<div class="m" style="margin-top:8px">Tested: {html.escape(tested)}</div></div>"""
+
+
+def render(sections) -> str:
+    now = pd.Timestamp.now(tz="UTC")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="300">
+<meta name="robots" content="noindex,nofollow"><title>ProTrader</title><style>{CSS}</style></head><body><div class="w">
+<h1>◆ PROTRADER</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · data refreshes every hour</div>
+{''.join(sections)}
+<div class="card m">Testing / education only. Not financial advice.</div>
 </div></body></html>"""
 
 
 def main():
     local = "--local" in sys.argv
-    result = aw.plan_trades(with_checks=True)
-    trades, _, peer_ok, chk = result
+    results, sections = {}, []
+    for sym, strat, peer_sym in aw.MARKETS:
+        try:
+            res = aw.plan_trades(sym, strat, peer_sym, with_checks=True)
+        except Exception as e:  # noqa: BLE001 - one market failing must not take the page down
+            sections.append(f"<h2>{sym}</h2><div class='card bad'>No data this hour: {html.escape(str(e)[:150])}</div>")
+            continue
+        results[sym] = res
+        trades, _, peer_ok, chk = res
+        sections.append(section(sym, strat, peer_sym, trades, chk, aw.stats(sym, strat), peer_ok))
     state = {} if local else load_state_ftp()
     if email_ready() and (not local or "--email" in sys.argv):
-        aw.check_once(state, send=send_email, result=result)
+        aw.check_once(state, send=send_email, results=results)
     elif not local:
         print("Gmail secrets missing - no emails this run")
-    page = render(trades, chk, aw.stats(), peer_ok)
+    page = render(sections)
     if local:
         os.makedirs(os.path.join(HERE, "site"), exist_ok=True)
         out = os.path.join(HERE, "site", "index.html")
@@ -147,7 +168,8 @@ def main():
         print("Page written to", out)
         return
     upload_ftp(page, state)
-    print("Page and state uploaded. Open trade:", bool(trades and trades[-1].get("open")))
+    print("Page and state uploaded:", ", ".join(f"{s} {'IN TRADE' if r[0] and r[0][-1].get('open') else 'wait'}"
+                                                for s, r in results.items()))
 
 
 if __name__ == "__main__":
