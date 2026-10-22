@@ -29,7 +29,7 @@ import pandas as pd
 from config import SPREADS
 from technical import add_indicators, rsi
 
-NAMES = {"mr_gold": "Gold deep dip-buy with daily trend + dollar check", "mr_eur": "EURUSD dip & rally fade, news-spike filter", "mr_rsi2x": "EURUSD deep dip-buy, news-spike filter", "mr_any": "Gold dip-buy combo (high win rate)", "mr_bb": "Bollinger dip-buy (high win rate)", "mr_rsi2": "Connors RSI(2) dip-buy (high win rate)",
+NAMES = {"mr_gold15": "Gold deep dip-buy on M15 (daily + H1 uptrend, dollar check)", "mr_gold": "Gold deep dip-buy with daily trend + dollar check", "mr_eur": "EURUSD dip & rally fade, news-spike filter", "mr_rsi2x": "EURUSD deep dip-buy, news-spike filter", "mr_any": "Gold dip-buy combo (high win rate)", "mr_bb": "Bollinger dip-buy (high win rate)", "mr_rsi2": "Connors RSI(2) dip-buy (high win rate)",
          "mr_d7": "Connors Double-7 dip-buy (high win rate)"}
 
 
@@ -52,6 +52,11 @@ def signal(d: pd.DataFrame, i: int, strat: str):
     mr_eur (EURUSD H1, 10y tested): deep dip = RSI(2) < 2 above SMA200; 2-candle dip = RSI(2) sum of 2 candles < 10 above
     SMA200; rally sell = RSI(2) > 98 below SMA200. All skipped after a news-spike candle.
     10y Dukascopy: 674 trades, 69% win, PF 1.32 (older 60% 1.39, newer 40% 1.22), 9 of 11 years profitable, ~5.6/month."""
+    if strat == "mr_gold15":                                  # gold M15: deep dips with the daily AND H1 uptrend
+        side, tier = signal(d, i, "mr_eur")
+        if side != 1 or tier != "deep dip" or not (d.dtrend.iloc[i] == 1 and d.h1trend.iloc[i] == 1):
+            return 0, None
+        return side, tier
     if strat == "mr_gold":                                    # gold: only deep dips, only with the daily uptrend
         side, tier = signal(d, i, "mr_eur")
         if side != 1 or tier != "deep dip" or not d.dtrend.iloc[i] == 1:
@@ -100,7 +105,7 @@ def exit_now(d: pd.DataFrame, j: int, strat: str, side: int = 1) -> bool:
         return c < d.sma5.iloc[j]
     if strat == "mr_bb":
         return c > d.bb_mid.iloc[j]
-    if strat in ("mr_rsi2", "mr_rsi2x", "mr_eur", "mr_gold", "mr_any"):
+    if strat in ("mr_rsi2", "mr_rsi2x", "mr_eur", "mr_gold", "mr_gold15", "mr_any"):
         return c > d.sma5.iloc[j]
     if strat == "mr_d7":
         return c >= d.hi7.iloc[j]
@@ -114,10 +119,11 @@ def checks(d: pd.DataFrame, i: int, strat: str) -> Dict:
         res.update(dip=bool(c < d.bb_lo.iloc[i]), level=float(d.bb_lo.iloc[i]), target=float(d.bb_mid.iloc[i]))
     elif strat == "mr_rsi2":
         res.update(dip=bool(d.rsi2.iloc[i] < 5), level=float(d.rsi2.iloc[i]), target=float(d.sma5.iloc[i]))
-    elif strat in ("mr_eur", "mr_gold"):
+    elif strat in ("mr_eur", "mr_gold", "mr_gold15"):
         side, tier = signal(d, i, strat)
         up = res["uptrend"]
-        res.update(dtrend=float(d.dtrend.iloc[i]) if "dtrend" in d and d.dtrend.iloc[i] == d.dtrend.iloc[i] else None)
+        res.update(dtrend=float(d.dtrend.iloc[i]) if "dtrend" in d and d.dtrend.iloc[i] == d.dtrend.iloc[i] else None,
+                   h1trend=float(d.h1trend.iloc[i]) if "h1trend" in d and d.h1trend.iloc[i] == d.h1trend.iloc[i] else None)
         res.update(usd_wide=float(d.usd_wide.iloc[i]) if "usd_wide" in d else None,
                    breakdown=bool(d.close.iloc[i] < d.lo30.iloc[i]) if res["uptrend"] else bool(d.close.iloc[i] > d.hi30.iloc[i]))
         res.update(dip=bool(side), side=side, tier=tier, level=float(d.rsi2.iloc[i]), cum2=float(d.cum2.iloc[i]),
@@ -138,7 +144,8 @@ def checks(d: pd.DataFrame, i: int, strat: str) -> Dict:
 # per-market exit settings that tested better than the default 3xATR safety stop
 EXITS = {("EURUSD", "mr_rsi2"): {"stop_atr": 1.5, "tp1_r": 1.0}, ("EURUSD", "mr_rsi2x"): {"stop_atr": 3.0, "tp1_r": None},
          ("EURUSD", "mr_eur"): {"stop_atr": 3.0, "tp1_r": 0.25 / 3.0},
-         ("XAUUSD", "mr_gold"): {"stop_atr": 3.0, "tp1_r": 0.25 / 3.0}}   # TP1 = +0.25xATR: close half, stop to breakeven
+         ("XAUUSD", "mr_gold"): {"stop_atr": 3.0, "tp1_r": 0.25 / 3.0},
+         ("XAUUSD", "mr_gold15"): {"stop_atr": 3.0, "tp1_r": 0.25 / 3.0}}   # TP1 = +0.25xATR: close half, stop to breakeven
 SPIKE_MAX = 2.5
 # Breakdown filter (EURUSD 10y): a dip that closes below the previous 30 candles' low (LL / BOS) is a structure break.
 # Skipping those: PF 1.75 -> 2.13 (older 2.05 / newer 2.29), full stop-outs halved, all 11 years profitable.
@@ -161,16 +168,26 @@ def usd_wide(d: pd.DataFrame, peer: pd.DataFrame, k: int = USD_WIDE_BARS) -> pd.
 
 
 # mr_eur / mr_gold TP1 is the real half-close level (0.25xATR)
-def add_daily_trend(d: pd.DataFrame, n: int = DAILY_SMA) -> None:
-    """dtrend = +1 / -1: yesterday's daily close above / below its n-day average (known at today's open)."""
-    day = d.close.resample("1D").last().dropna()
+def add_daily_trend(d: pd.DataFrame, n: int = DAILY_SMA, src: Optional[pd.Series] = None) -> None:
+    """dtrend = +1 / -1: yesterday's daily close above / below its n-day average (known at today's open).
+    src: a longer close series (e.g. H1) when d itself is too short."""
+    day = (src if src is not None else d.close).resample("1D").last().dropna()
     t = (day > day.rolling(n).mean()).astype(float) * 2 - 1
     t[day.rolling(n).mean().isna()] = np.nan
     t.index = t.index + pd.Timedelta(days=1)
     d["dtrend"] = t.reindex(d.index, method="ffill")
 
 
-TP_LEVELS = {"mr_gold": [(0.25 / 3.0, 92), (0.30, 36), (0.50, 11)], "mr_eur": [(0.25 / 3.0, 85), (0.30, 41), (0.50, 14)], "mr_rsi2x": [(0.15, 72), (0.30, 44), (0.50, 15)]}
+def add_h1_trend(d: pd.DataFrame, h1_close: pd.Series, n: int = 200) -> None:
+    """h1trend = +1 / -1: the last closed H1 candle above / below its n-candle average."""
+    m = h1_close.rolling(n).mean()
+    t = (h1_close > m).astype(float) * 2 - 1
+    t[m.isna()] = np.nan
+    t.index = t.index + pd.Timedelta(hours=1)                     # known when that H1 candle closes
+    d["h1trend"] = t.reindex(d.index, method="ffill")
+
+
+TP_LEVELS = {"mr_gold15": [(0.25 / 3.0, 92), (0.30, 37), (0.50, 12)], "mr_gold": [(0.25 / 3.0, 92), (0.30, 36), (0.50, 11)], "mr_eur": [(0.25 / 3.0, 86), (0.30, 33), (0.50, 12)], "mr_rsi2x": [(0.15, 72), (0.30, 44), (0.50, 15)]}
 
 
 def exit_cfg(sym: str, strat: str) -> Dict:
@@ -178,15 +195,19 @@ def exit_cfg(sym: str, strat: str) -> Dict:
 
 
 def trades(df: pd.DataFrame, sym: str, strat: str, stop_atr: Optional[float] = 3.0, max_bars: int = 400,
-           tp1_r: Optional[float] = None, peer: Optional[pd.DataFrame] = None) -> List[Dict]:
+           tp1_r: Optional[float] = None, peer: Optional[pd.DataFrame] = None,
+           trend_src: Optional[pd.Series] = None) -> List[Dict]:
     """One position at a time; enter at the signal candle's close, exit at the close when the bounce is done.
     With tp1_r: half the position is closed at entry + tp1_r x risk and the stop moves to breakeven.
-    peer: the cross-check pair (GBPUSD for EURUSD) for the USD-wide filter; without it the filter is off."""
+    peer: the cross-check pair (GBPUSD for EURUSD) for the USD-wide filter; without it the filter is off.
+    trend_src: H1 closes for the trend filters of a faster chart (mr_gold15), so a short M15 history is enough."""
     d = prepare(df)
-    if peer is not None and strat in ("mr_eur", "mr_gold"):
+    if peer is not None and strat in ("mr_eur", "mr_gold", "mr_gold15"):
         d["usd_wide"] = usd_wide(d, peer)
-    if strat == "mr_gold":
-        add_daily_trend(d)
+    if strat in ("mr_gold", "mr_gold15"):
+        add_daily_trend(d, src=trend_src)
+    if strat == "mr_gold15":
+        add_h1_trend(d, trend_src if trend_src is not None else d.close.resample("1h").last().dropna())
     c, h, l, a = d.close.values, d.high.values, d.low.values, d.atr.values
     spread = SPREADS.get(sym, 0)
     out, i, n = [], 210, len(d)

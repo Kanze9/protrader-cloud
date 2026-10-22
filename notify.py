@@ -50,8 +50,8 @@ def _rows_html(rows: List[Tuple[str, str, str]]) -> str:
 
 
 def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: List[Dict], balance: float = 1000.0,
-                 leverage: int = 500, shift_hours: int = 1) -> Tuple[str, str, str]:
-    """Entry email for an open plan trade (meanrev.trades output)."""
+                 leverage: int = 500, tf_minutes: int = 60, plan: Optional[Dict] = None) -> Tuple[str, str, str]:
+    """Entry email for an open plan trade. Tier A plans have TP1-TP3; tier B (trend) trades use a trailing stop."""
     inst = INSTRUMENTS[sym]
     d = inst.digits
     f = lambda x: f"{x:,.{d}f}"
@@ -63,9 +63,13 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
     pips = lambda v: abs(v - e) / inst.pip
     # distance as traders say it: pips for FX, dollars of price for gold
     dist = (lambda v: f"${abs(v - e):,.2f} price move") if sym == "XAUUSD" else (lambda v: f"{pips(v):.0f} pips")
-    when = t["time"] + pd.Timedelta(hours=shift_hours)       # signal is known when the H1 candle closes
-    rows = [("Direction", side, t.get("tier") or ""),
-            ("Entry", f(e), f"enter now at market (H1 candle closed {when:%Y-%m-%d %H:%M} UTC)"),
+    when = t["time"] + pd.Timedelta(minutes=tf_minutes)       # signal is known when its candle closes
+    tfname = "H1" if tf_minutes == 60 else f"M{tf_minutes}"
+    tier = (plan or {}).get("tier", "A")
+    label = f"[{tier}] {(plan or {}).get('name', '')}".strip()
+    rows = [("Plan", label, "high accuracy" if tier == "A" else "trend trade: wins less often, wins are bigger"),
+            ("Direction", side, t.get("tier") or ""),
+            ("Entry", f(e), f"enter now at market ({tfname} candle closed {when:%Y-%m-%d %H:%M} UTC)"),
             ("Stop loss", f(s0), f"-{dist(s0)} · -${pips(s0) * pip_usd:,.2f}")]
     for k, (v, lv, pct) in enumerate(t.get("tps") or [], 1):
         note = f"+{dist(v)} · +${pips(v) * pip_usd:,.2f} · {pct}% of past trades reached it"
@@ -73,39 +77,49 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
             note = (f"+{dist(v)} · +${pips(v) * pip_usd / 2:,.2f} on the half you close · {pct}% of past trades reached it"
                     " · CLOSE HALF here and move SL to entry (breakeven)")
         rows.append((f"TP{k}", f(v), note))
-    rows.append(("Final exit", f(t.get("target_now", e)),
-                 f"close the rest when an H1 candle closes back {'above' if buy else 'below'} the 5-candle average (moves each hour)"))
+    if t.get("tps"):
+        rows.append(("Final exit", f(t.get("target_now", e)),
+                     f"close the rest when a {tfname} candle closes back {'above' if buy else 'below'} the 5-candle average"))
+    else:
+        rows.append(("Exit", "trailing stop", "no fixed TP: the stop follows 3×ATR behind the best price - move it up after "
+                                              "each candle (the signal page shows the current stop)"))
+        if stats:
+            rows.append(("Typical", f"{stats['win']:.0f}% win", f"avg win {stats.get('avg_win', 0):+.1f}R · avg loss "
+                                                               f"{stats.get('avg_loss', 0):+.1f}R (R = your stop distance)"))
     per_move = f"$1 move = ${pip_usd * 10:,.2f}" if sym == "XAUUSD" else f"pip value ${pip_usd:,.2f}"
     rows.append(("Size", f"{ps['lots']:.2f} lot", f"{per_move} · margin ${ps['margin_usd']:,.2f} at 1:{leverage}"))
     skip = (f"Skip it if price is already {'above' if buy else 'below'} TP1 ({f(t['tps'][0][0])}) or "
             f"{'below' if buy else 'above'} the stop ({f(s0)})."
             if t.get("tps") else "Skip it if price already moved far from the entry.")
-    tested = (f"Tested 10 years: {stats['n']} trades, win {stats['win']:.0f}%, PF {stats['pf']:.2f}"
+    years = round((pd.Timestamp(stats["to"]) - pd.Timestamp(stats["from"])).days / 365.25) if stats and "from" in stats else 10
+    tested = (f"Tested {years} years: {stats['n']} trades, win {stats['win']:.0f}%, PF {stats['pf']:.2f}"
               f" (older {stats.get('pf_train', 0):.2f} / newer {stats.get('pf_test', 0):.2f}). "
               f"Assumes {'~$0.25/oz' if sym == 'XAUUSD' else '~0.9 pip'} cost (Razor)."
               if stats else "")
     news_txt = "; ".join(f"{n['time']:%H:%M} UTC {n.get('ccy', '')} {n.get('title', '')}" for n in news)
     warn = f"HIGH-IMPACT NEWS SOON: {news_txt} - wait until it is out." if news else "No high-impact news in the next hour."
-    subject = f"ProTrader · {('BUY' if buy else 'SELL')} {sym} @ {f(e)} · SL {f(s0)} · TP1 {f(t['tps'][0][0]) if t.get('tps') else '-'}"
+    subject = (f"ProTrader [{tier}] · {('BUY' if buy else 'SELL')} {sym} @ {f(e)} · SL {f(s0)} · "
+               + (f"TP1 {f(t['tps'][0][0])}" if t.get("tps") else "trailing stop"))
     text = "\n".join([f"{side} {sym}", ""] + [f"{k:11s} {v:>12s}  {n}" for k, v, n in rows] +
                      ["", skip, warn, tested, "", "Testing / education only. Not financial advice."])
     html_body = (f"<div style='font-family:Arial,sans-serif'><h2 style='color:{'#0a8f6a' if buy else '#c2185b'}'>"
-                 f"{html.escape(side)} {html.escape(sym)}</h2><table style='border-collapse:collapse'>{_rows_html(rows)}</table>"
+                 f"{html.escape(side)} {html.escape(sym)} <small>[{tier}]</small></h2><table style='border-collapse:collapse'>{_rows_html(rows)}</table>"
                  f"<p>{html.escape(skip)}</p><p style='color:{'#c62828' if news else '#555'}'><b>{html.escape(warn)}</b></p>"
                  f"<p style='color:#555'>{html.escape(tested)}</p><p style='color:#999;font-size:12px'>"
                  f"Testing / education only. Not financial advice.</p></div>")
     return subject, text, html_body
 
 
-def update_email(sym: str, t: Dict, kind: str) -> Tuple[str, str]:
+def update_email(sym: str, t: Dict, kind: str, plan: Optional[Dict] = None) -> Tuple[str, str]:
     """Follow-up emails: TP1 hit, or the trade closed."""
     d = INSTRUMENTS[sym].digits
     side = "BUY" if t["side"] == 1 else "SELL"
+    tag = f"[{plan['tier']}] {plan['name']}" if plan else sym
     if kind == "tp1":
         return (f"ProTrader · TP1 hit {sym} {side} - close half, SL to {t['entry']:,.{d}f}",
-                f"TP1 reached on your {sym} {side} from {t['entry']:,.{d}f}.\nClose HALF now and move the stop loss to the entry "
+                f"{tag}: TP1 reached on your {sym} {side} from {t['entry']:,.{d}f}.\nClose HALF now and move the stop loss to the entry "
                 f"price ({t['entry']:,.{d}f}). The rest closes on the snap-back.")
     res = "WIN" if t["r"] > 0 else "LOSS"
     return (f"ProTrader · {sym} {side} closed: {res} {t['r']:+.2f}R",
-            f"The plan closed your {sym} {side} from {t['entry']:,.{d}f} at {t['exit']:,.{d}f} ({t['r']:+.2f}R).\n"
+            f"{tag}: the plan closed your {sym} {side} from {t['entry']:,.{d}f} at {t['exit']:,.{d}f} ({t['r']:+.2f}R).\n"
             f"Close any part of the position that is still open.")

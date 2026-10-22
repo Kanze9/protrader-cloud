@@ -1,5 +1,5 @@
-"""One hourly run in the cloud (GitHub Actions): check EURUSD and gold, email new signals / TP1 / exits, and upload a
-signal page to the InfinityFree site by FTP.   Local preview:  .venv\\Scripts\\python cloud_job.py --local
+"""One hourly run in the cloud (GitHub Actions): run every tested plan (plans.PLANS), email new signals / TP1 / exits,
+and upload a signal page to the InfinityFree site by FTP.   Local preview:  .venv\\Scripts\\python cloud_job.py --local
 
 Environment (GitHub secrets): GMAIL_USER, GMAIL_APP_PASSWORD, ALERT_EMAIL_TO, ALERT_LOT, FTP_HOST, FTP_USER, FTP_PASSWORD.
 The "already emailed" memory is kept on the FTP space outside the public folder (state.json next to htdocs).
@@ -14,20 +14,23 @@ from ftplib import FTP, error_perm
 import pandas as pd
 
 import alert_worker as aw
-import meanrev
-from config import INSTRUMENTS
+from config import INSTRUMENTS, TIMEFRAMES
 from notify import email_ready, send_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COST_NOTE = {"EURUSD": "assumes ~0.9 pip cost (Razor)", "XAUUSD": "assumes ~$0.25/oz cost (Razor)"}
 CSS = """body{margin:0;background:#070b14;color:#dbe6f5;font-family:-apple-system,Segoe UI,Arial,sans-serif}
-.w{max-width:720px;margin:auto;padding:16px}h1{font-size:20px;letter-spacing:.08em;color:#4dd8ff;margin:4px 0 2px}
-h2{font-size:17px;letter-spacing:.06em;color:#4dd8ff;margin:22px 0 0}
+.w{max-width:760px;margin:auto;padding:16px}h1{font-size:20px;letter-spacing:.08em;color:#4dd8ff;margin:4px 0 2px}
+h2{font-size:17px;letter-spacing:.06em;color:#4dd8ff;margin:24px 0 0}
 .m{color:#7d8ca3;font-size:13px}.card{background:#0d1524;border:1px solid #1f2d44;border-radius:12px;padding:14px;margin:12px 0}
-.big{font-size:30px;font-weight:700;margin:4px 0}.buy{color:#00e5c0}.sell{color:#ff4d6d}.wait{color:#ffb547}
-table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 4px;border-bottom:1px solid #16233a}
+.hd{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tag{font-size:12px;padding:2px 8px;border-radius:10px;font-weight:700}.tA{background:#063d33;color:#00e5c0}.tB{background:#3d2b06;color:#ffb547}
+.big{font-size:26px;font-weight:700;margin:6px 0 2px}.buy{color:#00e5c0}.sell{color:#ff4d6d}.wait{color:#ffb547}
+.bar{height:8px;background:#16233a;border-radius:6px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%}
+table{width:100%;border-collapse:collapse;font-size:14px}td{padding:5px 4px;border-bottom:1px solid #16233a}
 td.r{text-align:right;color:#9fb0c8}.mono{font-family:Menlo,Consolas,monospace}.ok{color:#00e5c0}.bad{color:#ff4d6d}
-td{overflow-wrap:anywhere}@media(max-width:480px){h1{font-size:17px}.big{font-size:24px}table{font-size:13px}.w{padding:12px}}"""
+details summary{cursor:pointer;color:#9fb0c8;font-size:13px;margin-top:6px}
+td{overflow-wrap:anywhere}@media(max-width:480px){h1{font-size:17px}.big{font-size:22px}table{font-size:13px}.w{padding:12px}}"""
 
 
 def ftp():
@@ -60,106 +63,81 @@ def upload_ftp(page: str, state: dict):
         f.storbinary(f"STOR {os.environ.get('PAGE_NAME') or 'index.html'}", io.BytesIO(page.encode("utf-8")))
 
 
-def wait_reason(sym: str, strat: str, m: dict) -> str:
-    peer = {s: p for _, s, p in aw.MARKETS}.get(strat, "")
-    if strat == "mr_gold" and (not m["uptrend"] or m.get("dtrend") != 1):
-        return "Gold buys dips only while the daily and H1 trends are both up - not the case now, so it waits."
-    if not m.get("calm", True):
-        return "A news-spike candle printed in the last 3 hours - waiting for the market to calm down."
-    if m.get("breakdown"):
-        return "Price just broke the last 30 candles' range (LL/BOS) - a structure break, not a dip. Waiting."
-    if m.get("usd_wide") is not None and not m["usd_wide"] < meanrev.USD_WIDE_MAX:
-        return f"The whole US dollar is moving ({peer} moved as much as {sym}) - waiting."
-    if strat == "mr_gold":
-        return f"Uptrend on H1 and daily: waiting to BUY a deep dip (RSI(2) under 2). Now RSI(2) {m['level']:.0f}."
-    if m["uptrend"]:
-        return (f"Uptrend: waiting to BUY a dip (RSI(2) under 2, or 2-candle RSI(2) sum under 10). "
-                f"Now RSI(2) {m['level']:.0f}, 2-candle {m['cum2']:.0f}.")
-    return f"Downtrend: waiting to SELL a sharp rally (RSI(2) above 98). Now RSI(2) {m['level']:.0f}."
-
-
-def section(sym: str, strat: str, peer_sym: str, trades, chk, stats, peer_ok) -> str:
-    inst = INSTRUMENTS[sym]
+def card(res: dict) -> str:
+    p = res["plan"]
+    tag = f"<span class='tag t{p['tier']}'>{'A · HIGH ACCURACY' if p['tier'] == 'A' else 'B · TREND TRADE'}</span>"
+    head = f"<div class='hd'><b>{html.escape(p['name'])} <span class='m'>({p['tf']})</span></b>{tag}</div>"
+    if "error" in res:
+        return f"<div class='card'>{head}<div class='bad'>No data this hour: {html.escape(res['error'][:150])}</div></div>"
+    inst = INSTRUMENTS[p["sym"]]
     fmt = lambda x: f"{x:,.{inst.digits}f}"
-    last = trades[-1] if trades else None
-    open_t = last if last and last.get("open") else None
-    if open_t:
-        buy = open_t["side"] == 1
-        cls, word = ("buy", "BUY (LONG)") if buy else ("sell", "SELL (SHORT)")
-        e, s0 = open_t["entry"], open_t["stop0"]
-        pips = lambda v: abs(v - e) / inst.pip
-        rows = [("Entry", fmt(e), f"{open_t['time'] + pd.Timedelta(hours=1):%m-%d %H:%M} UTC"),
-                ("Stop loss", fmt(open_t.get("stop_now", s0)), f"-{pips(s0):.0f} pips" +
-                 (" · moved to breakeven" if open_t.get("tp1_time") is not None else ""))]
-        for k, ((v, _, pct), hit) in enumerate(zip(open_t.get("tps") or [], open_t.get("tp_hit") or []), 1):
+    dist = (lambda v, e: f"${abs(v - e):,.2f}") if p["sym"] == "XAUUSD" else (lambda v, e: f"{abs(v - e) / inst.pip:.0f} pips")
+    mins = TIMEFRAMES[p["tf"]][1]
+    t = res["open"]
+    if t:
+        buy = t["side"] == 1
+        e, s0 = t["entry"], t["stop0"]
+        rows = [("Entry", fmt(e), f"{t['time'] + pd.Timedelta(minutes=mins):%m-%d %H:%M} UTC"),
+                ("Stop now", fmt(t.get("stop_now", s0)), f"started at {fmt(s0)} (-{dist(s0, e)})")]
+        for k, ((v, _, pct), hit) in enumerate(zip(t.get("tps") or [], t.get("tp_hit") or []), 1):
             note = "HIT ✓" if hit else f"{pct}% of past trades reached it"
-            if k == 1:
-                note += " · close HALF, move SL to entry"
-            rows.append((f"TP{k}", fmt(v), f"+{pips(v):.0f} pips · {note}"))
-        rows.append(("Final exit", fmt(open_t.get("target_now", e)),
-                     f"close the rest when an H1 candle closes back {'above' if buy else 'below'} this 5-candle average"))
-        rows.append(("Now", fmt(chk["price"]), f"{open_t.get('open_r', 0):+.2f}R"))
-        body = (f"<div class='big {cls}'>IN TRADE · {word}</div><div class='m'>{html.escape(open_t.get('tier') or '')}</div>"
+            rows.append((f"TP{k}", fmt(v), f"+{dist(v, e)} · {note}" + (" · close HALF, SL to entry" if k == 1 else "")))
+        if t.get("tps"):
+            rows.append(("Final exit", fmt(t.get("target_now", e)), "close the rest on the snap-back across the 5-candle average"))
+        else:
+            rows.append(("Exit", "trailing", "no fixed TP: keep moving the stop to 'Stop now' each hour"))
+        rows.append(("Now", fmt(res["price"]), f"{t.get('open_r', 0):+.2f}R"))
+        body = (f"<div class='big {'buy' if buy else 'sell'}'>IN TRADE · {'BUY' if buy else 'SELL'}</div>"
                 "<table>" + "".join(f"<tr><td>{k}</td><td class='mono'><b>{v}</b></td><td class='r'>{html.escape(n)}</td></tr>"
                                     for k, v, n in rows) + "</table>")
     else:
-        body = f"<div class='big wait'>WAIT</div><div>{html.escape(wait_reason(sym, strat, chk))}</div>"
-    if strat == "mr_gold":
-        checks = [("H1 uptrend (200-average)", chk["uptrend"], "yes" if chk["uptrend"] else "no"),
-                  ("Daily uptrend (50-day average)", chk.get("dtrend") == 1, "yes" if chk.get("dtrend") == 1 else "no")]
-    else:
-        checks = [("Trend (200-average)", True, "buy dips" if chk["uptrend"] else "sell rallies")]
-    checks += [("No news spike (last 3 candles)", chk["calm"], f"{chk['spike']:.1f}×ATR"),
-               ("No structure break (30 candles)", not chk.get("breakdown"), "clear" if not chk.get("breakdown") else "break"),
-               (f"{sym[:3] if sym != 'XAUUSD' else 'Gold'}-only move ({peer_sym} check)",
-                chk.get("usd_wide") is None or chk["usd_wide"] < meanrev.USD_WIDE_MAX,
-                f"no {peer_sym} data" if not peer_ok or chk.get("usd_wide") is None else f"{chk['usd_wide']:.2f} / <{meanrev.USD_WIDE_MAX}")]
-    chk_html = "".join(f"<tr><td>{n}</td><td class='r {'ok' if ok else 'bad'}'>{'✓' if ok else '✗'} {html.escape(v)}</td></tr>"
-                       for n, ok, v in checks)
-    hist = [t for t in trades if not t.get("open")][-8:][::-1]
-    hist_html = "".join(
-        f"<tr><td>{t['time'] + pd.Timedelta(hours=1):%m-%d %H:%M}</td><td class='{'buy' if t['side'] == 1 else 'sell'}'>"
-        f"{'BUY' if t['side'] == 1 else 'SELL'}</td><td class='m'>{html.escape(t.get('tier') or '')}</td>"
-        f"<td class='r {'ok' if t['r'] > 0 else 'bad'}'>{t['r']:+.2f}R</td></tr>" for t in hist)
-    tested = (f"{stats['n']} trades · win {stats['win']:.0f}% · PF {stats['pf']:.2f} (older {stats.get('pf_train', 0):.2f} / "
-              f"newer {stats.get('pf_test', 0):.2f}) · 10 years · {COST_NOTE.get(sym, '')}" if stats else "")
-    return f"""<h2>{'GOLD · XAUUSD' if sym == 'XAUUSD' else sym}</h2>
-<div class="m">last H1 close {fmt(chk['price'])} at {chk['time'] + pd.Timedelta(hours=1):%H:%M} UTC</div>
-<div class="card">{body}</div>
-<div class="card"><b>Checklist</b><table>{chk_html}</table></div>
-<div class="card"><b>Last signals</b><table>{hist_html or "<tr><td>none in the loaded history</td></tr>"}</table>
-<div class="m" style="margin-top:8px">Tested: {html.escape(tested)}</div></div>"""
+        m = res["meter"]
+        pct = round(100 * m["met"] / m["total"])
+        color = "#00e5c0" if m["ready"] else "#ffb547" if pct >= 60 else "#4a5a75"
+        missing = [n for n, ok, _ in m["items"] if not ok]
+        body = (f"<div class='big wait'>WAIT</div><div>{html.escape(m['side'])} setup <b>{m['met']}/{m['total']}</b> ready"
+                f"{' - waiting for: ' + html.escape(', '.join(missing[:3])) if missing else ''}</div>"
+                f"<div class='bar'><i style='width:{pct}%;background:{color}'></i></div>"
+                "<details><summary>All conditions</summary><table>" +
+                "".join(f"<tr><td>{html.escape(n)}</td><td class='r {'ok' if ok else 'bad'}'>{'✓' if ok else '✗'} {html.escape(v)}</td></tr>"
+                        for n, ok, v in m["items"]) + "</table></details>")
+    s = res["stats"]
+    tested = (f"{s['n']} trades · win {s['win']:.0f}% · PF {s['pf']:.2f} (older {s['pf_train']:.2f} / newer {s['pf_test']:.2f}) · "
+              f"~{s['per_month']:.1f}/month · {COST_NOTE.get(p['sym'], '')}" if s else "")
+    hist = [x for x in res["trades"] if not x.get("open")][-5:][::-1]
+    hist_html = " ".join(f"<span class='{'ok' if x['r'] > 0 else 'bad'}'>{x['r']:+.2f}R</span>" for x in hist)
+    return (f"<div class='card'>{head}{body}<div class='m' style='margin-top:8px'>Last results: {hist_html or 'none in view'}"
+            f"<br>Tested: {html.escape(tested)}</div></div>")
 
 
-def render(sections) -> str:
+def render(results) -> str:
     now = pd.Timestamp.now(tz="UTC")
+    secs = []
+    for sym, title in (("EURUSD", "EURUSD"), ("XAUUSD", "GOLD · XAUUSD")):
+        rs = [r for r in results if r["plan"]["sym"] == sym]
+        price = next((r["price"] for r in rs if "price" in r), None)
+        secs.append(f"<h2>{title}</h2><div class='m'>last close {f'{price:,.{INSTRUMENTS[sym].digits}f}' if price else '-'}</div>"
+                    + "".join(card(r) for r in rs))
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="300">
 <meta name="robots" content="noindex,nofollow"><title>ProTrader</title><style>{CSS}</style></head><body><div class="w">
-<h1>◆ PROTRADER</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · data refreshes every hour</div>
-{''.join(sections)}
-<div class="card m">Testing / education only. Not financial advice.</div>
+<h1>◆ PROTRADER</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · data refreshes every hour<br>
+<b class="ok">A</b> = high accuracy (83-91% win, small wins) · <b style="color:#ffb547">B</b> = trend trade (~40% win, trailing stop, bigger wins)</div>
+{''.join(secs)}
+<div class="card m">The setup meter shows how many of a plan's tested conditions are met now. A signal comes only at full.
+Testing / education only. Not financial advice.</div>
 </div></body></html>"""
 
 
 def main():
     local = "--local" in sys.argv
-    results, sections = {}, []
-    for sym, strat, peer_sym in aw.MARKETS:
-        try:
-            res = aw.plan_trades(sym, strat, peer_sym, with_checks=True)
-        except Exception as e:  # noqa: BLE001 - one market failing must not take the page down
-            sections.append(f"<h2>{sym}</h2><div class='card bad'>No data this hour: {html.escape(str(e)[:150])}</div>")
-            continue
-        results[sym] = res
-        trades, _, peer_ok, chk = res
-        sections.append(section(sym, strat, peer_sym, trades, chk, aw.stats(sym, strat), peer_ok))
+    results = aw.run_all()
     state = {} if local else load_state_ftp()
     if email_ready() and (not local or "--email" in sys.argv):
         aw.check_once(state, send=send_email, results=results)
     elif not local:
         print("Gmail secrets missing - no emails this run")
-    page = render(sections)
+    page = render(results)
     if local:
         os.makedirs(os.path.join(HERE, "site"), exist_ok=True)
         out = os.path.join(HERE, "site", "index.html")
@@ -168,8 +146,8 @@ def main():
         print("Page written to", out)
         return
     upload_ftp(page, state)
-    print("Page and state uploaded:", ", ".join(f"{s} {'IN TRADE' if r[0] and r[0][-1].get('open') else 'wait'}"
-                                                for s, r in results.items()))
+    print("Page and state uploaded:", ", ".join(
+        f"{r['plan']['id']} {'ERROR' if 'error' in r else 'IN TRADE' if r['open'] else 'wait'}" for r in results))
 
 
 if __name__ == "__main__":

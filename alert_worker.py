@@ -1,7 +1,7 @@
-"""Background Gmail alerts for the tested plans (EURUSD, gold) - runs without the browser:  run_alerts.bat
+"""Background Gmail alerts for every tested plan (plans.PLANS: tier A high accuracy, tier B trend) - runs without the browser.
    .venv\\Scripts\\python alert_worker.py           check every minute, email new signals / TP1 hits / exits
    .venv\\Scripts\\python alert_worker.py --test    email the latest EURUSD signal once (checks that Gmail works)
-   .venv\\Scripts\\python alert_worker.py --dry     print the latest signal email of each market instead of sending it
+   .venv\\Scripts\\python alert_worker.py --dry     print the latest signal email of each plan instead of sending it
 """
 import json
 import logging
@@ -11,78 +11,54 @@ import time
 
 import pandas as pd
 
-import meanrev
 import news as newsmod
-from config import BARS, INSTRUMENTS
+import plans
+from config import BARS, INSTRUMENTS, TIMEFRAMES
 from data_feed import load_ohlc, load_tv_pair
 from notify import alert_lot, email_ready, send_email, signal_email, update_email
 
-# market, plan, dollar cross-check pair
-MARKETS = [("EURUSD", "mr_eur", "GBPUSD"), ("XAUUSD", "mr_gold", "EURUSD")]
-SYM, STRAT, PEER = MARKETS[0]                        # default market for --test
-TF = "H1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "models", "alert_state.json")
 logging.basicConfig(filename=os.path.join(HERE, "alert_worker.log"), level=logging.INFO,
                     format="%(asctime)s %(message)s")
 log = logging.getLogger("alerts")
+OLD_KEYS = {"EURUSD": "eur_a", "XAUUSD": "gold_a"}          # state from the per-market version
 
 
-def closed(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop the candle that is still forming (signals use closed H1 candles only)."""
+def closed(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+    """Drop the candle that is still forming (signals use closed candles only)."""
     now = pd.Timestamp.now(tz="UTC")
-    return df[df.index + pd.Timedelta(hours=1) <= now]
+    return df[df.index + pd.Timedelta(minutes=TIMEFRAMES[tf][1]) <= now]
 
 
-def get_h1(sym: str):
-    """H1 candles: TradingView (Pepperstone) first; Dukascopy if TradingView refuses (cloud servers); then Yahoo."""
-    try:
-        df = load_ohlc(sym, TF, BARS[TF]) if sym in INSTRUMENTS else load_tv_pair(sym, TF, BARS[TF])
-        if df is not None and len(df) > 300:
-            return df
-    except Exception as e:  # noqa: BLE001
-        log.info("TradingView %s failed: %s", sym, e)
-    try:
-        from dukascopy_python import INTERVAL_HOUR_1
-        from fetch_dukascopy import fetch
-        df = fetch(sym, INTERVAL_HOUR_1, 160, 365)              # enough for the 50-day trend filter
-        if len(df) > 300:
-            return df[df.volume > 0]
-    except Exception as e:  # noqa: BLE001
-        log.info("Dukascopy %s failed: %s", sym, e)
-    return None
+def make_getter():
+    """get(symbol, tf) -> closed candles, cached for one round: TradingView (Pepperstone) first, Dukascopy if refused."""
+    cache = {}
+
+    def get(sym: str, tf: str):
+        if (sym, tf) in cache:
+            return cache[(sym, tf)]
+        df = None
+        try:
+            df = load_ohlc(sym, tf, BARS[tf]) if sym in INSTRUMENTS else load_tv_pair(sym, tf, BARS[tf])
+        except Exception as e:  # noqa: BLE001
+            log.info("TradingView %s %s failed: %s", sym, tf, e)
+        if df is None or len(df) < 300:
+            try:
+                import dukascopy_python as dk
+                from fetch_dukascopy import fetch
+                iv = {"H1": dk.INTERVAL_HOUR_1, "M15": dk.INTERVAL_MIN_15}[tf]
+                df = fetch(sym, iv, 160 if tf == "H1" else 30, 365 if tf == "H1" else 30)
+                df = df[df.volume > 0]
+            except Exception as e:  # noqa: BLE001
+                log.info("Dukascopy %s %s failed: %s", sym, tf, e)
+                df = None
+        cache[(sym, tf)] = closed(df, tf) if df is not None and len(df) else None
+        return cache[(sym, tf)]
+    return get
 
 
-def plan_trades(sym: str = SYM, strat: str = STRAT, peer_sym: str = PEER, with_checks: bool = False):
-    d = get_h1(sym)
-    if d is None:
-        raise RuntimeError(f"no {sym} data from TradingView, Dukascopy or Yahoo")
-    d = closed(d)
-    peer = get_h1(peer_sym)
-    peer = closed(peer) if peer is not None else None
-    cfg = meanrev.exit_cfg(sym, strat)
-    trades = meanrev.trades(d, sym, strat, cfg["stop_atr"], tp1_r=cfg["tp1_r"], peer=peer)
-    if not with_checks:
-        return trades, d.index[-1], peer is not None
-    dm = meanrev.prepare(d)
-    if peer is not None:
-        dm["usd_wide"] = meanrev.usd_wide(dm, peer)
-    if strat == "mr_gold":
-        meanrev.add_daily_trend(dm)
-    chk = meanrev.checks(dm, len(dm) - 1, strat)
-    chk["price"], chk["time"] = float(dm.close.iloc[-1]), dm.index[-1]
-    return trades, d.index[-1], peer is not None, chk
-
-
-def stats(sym: str = SYM, strat: str = STRAT):
-    try:
-        with open(os.path.join(HERE, "models", "strategy_stats.json"), encoding="utf-8") as fh:
-            return json.load(fh)["stats"].get(f"{strat}|{sym}|H1")
-    except (OSError, ValueError, KeyError):
-        return None
-
-
-def news_soon(sym: str = SYM):
+def news_soon(sym: str):
     try:
         now = pd.Timestamp.now(tz="UTC")
         return [x for x in newsmod.relevant_events(newsmod.fetch_calendar(), sym)
@@ -104,68 +80,79 @@ def save_state(st):
         json.dump(st, fh, indent=1)
 
 
-def entry_mail(t, sym: str = SYM, strat: str = STRAT):
-    return signal_email(sym, t, stats(sym, strat), alert_lot(), news_soon(sym))
+def entry_mail(res: dict, t: dict):
+    p = res["plan"]
+    return signal_email(p["sym"], t, res["stats"], alert_lot(), news_soon(p["sym"]), tf_minutes=TIMEFRAMES[p["tf"]][1], plan=p)
 
 
-def check_market(st, sym, strat, result, send):
-    """Email new entries / TP1 hits / exits of one market once each."""
-    trades, last_bar, peer_ok = result[:3]
-    if not peer_ok:
-        log.info("%s: cross-check pair unavailable - dollar filter off this round", sym)
-    if sym == "EURUSD" and "entries" in st:                      # state from the EURUSD-only version
+def check_plan(st, res, send):
+    """Email new entries / TP1 hits / exits of one plan once each."""
+    p = res["plan"]
+    if "entries" in st:                                           # oldest format: EURUSD only
         st.setdefault("EURUSD", {})["entries"] = st.pop("entries")
-    sent = st.setdefault(sym, {}).setdefault("entries", {})
-    for t in trades:
+    for old, new in OLD_KEYS.items():
+        if old in st and new not in st:
+            st[new] = st.pop(old)
+    sent = st.setdefault(p["id"], {}).setdefault("entries", {})
+    fresh_from = res["time"] - pd.Timedelta(minutes=TIMEFRAMES[p["tf"]][1])      # last two closed candles
+    for t in res["trades"]:
         tid = str(t["time"])
         info = sent.get(tid)
         if info is None:
-            # only signals from the last two closed candles are worth entering
-            if t["time"] >= last_bar - pd.Timedelta(hours=1) and t.get("open"):
-                send(*entry_mail(t, sym, strat))
-                log.info("sent entry %s %s %s", sym, tid, t["side"])
+            if t["time"] >= fresh_from and t.get("open"):
+                send(*entry_mail(res, t))
+                log.info("sent entry %s %s %s", p["id"], tid, t["side"])
             sent[tid] = {"tp1": t.get("tp1_time") is not None, "closed": not t.get("open")}
             continue
         if t.get("tp1_time") is not None and not info["tp1"]:
-            send(*update_email(sym, t, "tp1"))
+            send(*update_email(p["sym"], t, "tp1", p))
             info["tp1"] = True
-            log.info("sent tp1 %s %s", sym, tid)
+            log.info("sent tp1 %s %s", p["id"], tid)
         if not t.get("open") and not info["closed"]:
-            send(*update_email(sym, t, "closed"))
+            send(*update_email(p["sym"], t, "closed", p))
             info["closed"] = True
-            log.info("sent close %s %s %+.2fR", sym, tid, t["r"])
-    return trades
+            log.info("sent close %s %s %+.2fR", p["id"], tid, t["r"])
+
+
+def run_all(get=None):
+    """Every plan's result (plans.run_plan); a plan that fails is reported as {"plan", "error"}."""
+    get = get or make_getter()
+    out = []
+    for p in plans.PLANS:
+        try:
+            out.append(plans.run_plan(p, get))
+        except Exception as e:  # noqa: BLE001 - one plan failing must not stop the others
+            log.warning("%s failed: %s", p["id"], e)
+            out.append({"plan": p, "error": str(e)})
+    return out
 
 
 def check_once(st, send=None, results=None):
-    """All markets. `results` maps symbol -> plan_trades output, so a caller can reuse data it already loaded."""
     send = send or send_email
-    for sym, strat, peer_sym in MARKETS:
-        try:
-            res = (results or {}).get(sym) or plan_trades(sym, strat, peer_sym)
-            check_market(st, sym, strat, res, send)
-        except Exception as e:  # noqa: BLE001 - one market failing must not stop the other
-            log.warning("%s check failed: %s", sym, e)
+    for res in results or run_all():
+        if "error" not in res:
+            check_plan(st, res, send)
 
 
 def main():
     if "--dry" in sys.argv:
-        for sym, strat, peer_sym in MARKETS:
-            trades, _, _ = plan_trades(sym, strat, peer_sym)
-            if trades:
-                subject, text, _ = entry_mail(trades[-1], sym, strat)
+        for res in run_all():
+            if "error" in res:
+                print(res["plan"]["id"], "ERROR", res["error"])
+            elif res["trades"]:
+                subject, text, _ = entry_mail(res, res["trades"][-1])
                 print(subject + "\n\n" + text + "\n" + "-" * 70)
         return
     if "--test" in sys.argv:
-        trades, _, _ = plan_trades()
-        subject, text, html_body = entry_mail(trades[-1])
+        res = plans.run_plan(plans.PLANS[0], make_getter())
+        subject, text, html_body = entry_mail(res, res["trades"][-1])
         send_email("[TEST] " + subject, "This is a test with the latest signal.\n\n" + text, html_body)
         print("Test email sent to", os.getenv("ALERT_EMAIL_TO") or os.getenv("GMAIL_USER"))
         return
     if not email_ready():
         raise SystemExit("Gmail is not set up - run:  .venv\\Scripts\\python set_email.py")
     st = load_state() or {}
-    print("Gmail alerts running for", ", ".join(m[0] for m in MARKETS), "(checks every 60 s). Close this window to stop.")
+    print("Gmail alerts running for", len(plans.PLANS), "plans (checks every 60 s). Close this window to stop.")
     while True:
         check_once(st)
         save_state(st)

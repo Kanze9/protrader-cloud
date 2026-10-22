@@ -65,7 +65,7 @@ BARS = {"M5": 1200, "M15": 2000, "H1": 3000, "H4": 500, "D1": 400}
 
 # Typical Pepperstone Razor all-in cost (spread + commission) in price units.
 # Used to pad stops and to show the real cost of a scalp in R.
-SPREADS = {"XAUUSD": 0.20, "BTCUSD": 20.0, "EURUSD": 0.00009, "USDJPY": 0.012,
+SPREADS = {"XAUUSD": 0.25, "BTCUSD": 20.0, "EURUSD": 0.00009, "USDJPY": 0.012,
            "GBPUSD": 0.00012, "NAS100": 1.2}
 
 # AI brain: DeepSeek through the user's OpenAI-compatible relay (DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL in .env)
