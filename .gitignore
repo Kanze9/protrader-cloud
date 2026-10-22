@@ -1,0 +1,6 @@
+.env
+*.log
+__pycache__/
+site/
+calendar_cache.json
+models/*.pkl

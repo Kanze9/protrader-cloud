@@ -1,0 +1,34 @@
+name: EURUSD signals
+
+on:
+  schedule:
+    # 3 minutes after every hour (UTC), Sunday to Friday - the forex week. GitHub may start a few minutes late.
+    - cron: "3 * * * 0-5"
+  workflow_dispatch: {}          # "Run workflow" button for a manual check
+
+concurrency:
+  group: signals
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-cloud.txt
+      - run: pip install -r requirements-cloud.txt
+      - run: python -W ignore cloud_job.py
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_LOT: ${{ secrets.ALERT_LOT }}
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          PAGE_NAME: ${{ secrets.PAGE_NAME }}

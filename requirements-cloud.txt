@@ -1,0 +1,9 @@
+# Only what cloud_job.py needs (GitHub Actions). The full app uses requirements.txt.
+pandas>=2.2
+numpy>=1.26
+requests>=2.32
+python-dotenv>=1.0
+feedparser>=6.0
+yfinance>=0.2.50
+dukascopy-python>=4.0
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
