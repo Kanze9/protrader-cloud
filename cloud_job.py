@@ -25,8 +25,14 @@ PIP = INSTRUMENTS[SYM].pip
 
 
 def ftp():
-    f = FTP(os.environ.get("FTP_HOST", "ftpupload.net"), timeout=60)
-    f.login(os.environ["FTP_USER"], os.environ["FTP_PASSWORD"])
+    # GitHub passes a missing secret as an empty string, so fall back on empty values too
+    host = (os.environ.get("FTP_HOST") or "ftpupload.net").strip()
+    user, pw = (os.environ.get("FTP_USER") or "").strip(), os.environ.get("FTP_PASSWORD") or ""
+    if not user or not pw:
+        raise SystemExit("FTP_USER / FTP_PASSWORD secret is empty - add them in Settings -> Secrets and variables -> Actions.")
+    f = FTP(timeout=60)
+    f.connect(host, 21)
+    f.login(user, pw)
     return f
 
 
