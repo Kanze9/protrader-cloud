@@ -21,6 +21,8 @@ AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": 
 PLANS = [
     {"id": "eur_a", "sym": "EURUSD", "tf": "H1", "tier": "A", "kind": "mr", "strat": "mr_eur", "peer": "GBPUSD",
      "name": "EURUSD dip-buy / rally-sell"},
+    {"id": "eur_r3", "sym": "EURUSD", "tf": "H1", "tier": "A", "kind": "mr", "strat": "mr_eur_r3", "peer": "GBPUSD",
+     "name": "EURUSD Connors R3"},
     {"id": "gold_a", "sym": "XAUUSD", "tf": "H1", "tier": "A", "kind": "mr", "strat": "mr_gold", "peer": "EURUSD",
      "name": "Gold deep dip"},
     {"id": "gold_a15", "sym": "XAUUSD", "tf": "M15", "tier": "A", "kind": "mr", "strat": "mr_gold15", "peer": "EURUSD",
@@ -108,6 +110,16 @@ def mr_meter(plan: Dict, m: Dict) -> Dict:
               "no data" if m.get("usd_wide") is None else f"{m['usd_wide']:.2f} (<{meanrev.USD_WIDE_MAX})")
     calm = ("No news spike (last 3 candles)", m["calm"], f"{m['spike']:.1f}×ATR")
     brk = ("No structure break (30 candles)", not m.get("breakdown"), "clear" if not m.get("breakdown") else "break")
+    if plan["strat"] == "mr_eur_r3":
+        r = m.get("rsi2_last3") or [50, 50, 50]
+        up = m["uptrend"]
+        want = 1 if up else -1
+        falls = (r[2] < r[1] < r[0]) if up else (r[2] > r[1] > r[0])
+        return _meter("BUY" if up else "SELL", [
+            ("Trend (200-average)", True, "buy dips" if up else "sell rallies"),
+            ("Daily trend agrees", m.get("dtrend") == want, ""), calm, brk, dollar,
+            ("RSI2 " + ("falling" if up else "rising") + " 3 candles in a row", falls, " > ".join(f"{v:.0f}" for v in r)),
+            ("RSI2 " + ("< 10" if up else "> 90"), r[2] < 10 if up else r[2] > 90, f"{r[2]:.0f}")])
     if plan["strat"] == "mr_eur":
         if m["uptrend"]:
             dip = ("Dip deep enough (RSI2 < 2 or 2-candle < 10)", m["level"] < 2 or m["cum2"] < 10,
@@ -154,7 +166,7 @@ def run_plan(plan: Dict, get: Callable[[str, str], Optional[pd.DataFrame]]) -> D
         dm = meanrev.prepare(d_raw)
         if peer is not None:
             dm["usd_wide"] = meanrev.usd_wide(dm, peer)
-        if plan["strat"] in ("mr_gold", "mr_gold15"):
+        if plan["strat"] in ("mr_gold", "mr_gold15", "mr_eur_r3"):
             meanrev.add_daily_trend(dm, src=trend_src)
         if plan["strat"] == "mr_gold15":
             meanrev.add_h1_trend(dm, trend_src)
