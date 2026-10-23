@@ -1,0 +1,14 @@
+openai>=1.40
+streamlit>=1.45
+plotly>=5.22
+pandas>=2.2
+numpy>=1.26
+yfinance>=0.2.50
+feedparser>=6.0
+requests>=2.32
+python-dotenv>=1.0
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
+# Optional, Windows + MT5 terminal logged into a Pepperstone (demo) account:
+# MetaTrader5>=5.0.45
+scikit-learn>=1.5
+dukascopy-python>=4.0

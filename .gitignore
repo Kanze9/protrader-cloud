@@ -3,4 +3,6 @@
 __pycache__/
 site/
 calendar_cache.json
-models/*.pkl
+signal_journal.csv
+models/duka_*.pkl
+models/yahoo_h1_cache.pkl
