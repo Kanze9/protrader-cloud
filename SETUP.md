@@ -51,3 +51,19 @@ Close `run_alerts.bat` on your PC once the cloud works - otherwise you get every
   the Actions tab and click **Enable**, or push any small change.
 - After the plan changes on your PC: `.venv\Scripts\python sync_cloud.py` in ProTraderAI, then `git add -A`,
   `git commit -m "update"` and `git push` in ProTraderCloud.
+
+## 8. The full app on your phone (Streamlit Community Cloud, free)
+1. Open https://share.streamlit.io and **Continue with GitHub** (account Kanze9). Allow access to private repositories.
+2. **Create app** -> **Deploy from GitHub**: Repository `Kanze9/protrader-cloud`, Branch `main`, Main file `app.py`.
+   Pick a short App URL, e.g. `protrader-kanze`.
+3. **Advanced settings**: Python 3.12. In **Secrets** paste (with your own key):
+   ```
+   DEEPSEEK_API_KEY = "your DeepSeek key"
+   DEEPSEEK_BASE_URL = "https://tbnx.plus7.plus/v1"
+   ```
+4. **Deploy**. The first start takes 3-5 minutes (it installs everything).
+5. Keep it private: the app's **Settings -> Sharing** -> only specific people -> add your own email.
+   Apps from a private repository start private.
+- On a phone the settings sidebar is behind the **»** button at the top left.
+- After a few days without visits the app sleeps; opening it wakes it in about 30 seconds.
+- If TradingView refuses the cloud server, the app falls back to Yahoo / other data and says so at the top.
