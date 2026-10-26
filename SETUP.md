@@ -67,3 +67,18 @@ Close `run_alerts.bat` on your PC once the cloud works - otherwise you get every
 - On a phone the settings sidebar is behind the **»** button at the top left.
 - After a few days without visits the app sleeps; opening it wakes it in about 30 seconds.
 - If TradingView refuses the cloud server, the app falls back to Yahoo / other data and says so at the top.
+
+## 9. On-time email alerts (optional, free): an outside timer
+GitHub's free scheduler often skips runs (on 2026-10-26 it ran only every 3-6 hours), so emails can come late.
+A free timer at cron-job.org can start the job every 30 minutes instead. You do these steps yourself (your accounts, your token):
+1. GitHub -> your picture -> **Settings** -> **Developer settings** -> **Personal access tokens** -> **Fine-grained tokens** ->
+   **Generate new token**. Name `cron`, expiration 1 year, **Only select repositories** -> `protrader-cloud`,
+   **Repository permissions** -> **Actions: Read and write**. Generate and copy the token (keep it secret).
+2. Make a free account at **cron-job.org** -> **Create cronjob**:
+   - URL: `https://api.github.com/repos/Kanze9/protrader-cloud/actions/workflows/signals.yml/dispatches`
+   - Schedule: every 30 minutes
+   - **Advanced**: Request method **POST**; headers `Accept: application/vnd.github+json`,
+     `Authorization: Bearer <your token>`, `X-GitHub-Api-Version: 2022-11-28`; request body `{"ref":"main"}`
+3. Save and press **Test run**: GitHub -> Actions should show a new "workflow_dispatch" run within a few seconds.
+4. Then remove the `schedule:` lines from `.github/workflows/signals.yml` (or keep them as a backup). At every 30 minutes the
+   job uses about 1,460 of the 2,000 free GitHub minutes a month - don't go faster on a private repository.
