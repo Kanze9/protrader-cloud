@@ -1611,6 +1611,14 @@ def proof_card(res):
         fig_.update_xaxes(gridcolor=GRID)
         fig_.update_yaxes(gridcolor=GRID, tickprefix="$")
         st.plotly_chart(fig_, use_container_width=True, config={"displayModeBar": False})
+        # bad-luck check: the same trades in 500 random orders (drawn with replacement)
+        rr = np.array([x for _, x in rows]) / 100
+        sims = np.random.default_rng(11).choice(rr, size=(500, len(rr)), replace=True)
+        eqs = np.cumprod(1 + sims, axis=1)
+        dds = 1 - (eqs / np.maximum.accumulate(eqs, axis=1)).min(axis=1)
+        lo, hi = np.percentile(eqs[:, -1] * balance, [5, 95])
+        st.markdown(f"<div class='txt' style='margin:4px 0 8px'>🎲 {T('Bad-luck check (same trades, 500 random orders): in 1 case out of 20 the worst drop reaches {d}%; the ending balance lands between ${a} and ${b} in 9 cases out of 10.', d=f'{100 * np.percentile(dds, 95):.0f}', a=f'{lo:,.0f}', b=f'{hi:,.0f}')}</div>",
+                    unsafe_allow_html=True)
         cells = "".join(f"<td style='text-align:center;padding:4px 6px;color:{UP if v >= 0 else DOWN}'><div class='muted' style='font-size:11px'>{y_}</div>"
                         f"<b class='mono'>{v:+.0f}%</b></td>" for y_, v in zip(by_year.index, yr_pct))
         st.markdown(f"<div style='overflow-x:auto'><table style='width:100%'><tr>{cells}</tr></table></div>", unsafe_allow_html=True)
