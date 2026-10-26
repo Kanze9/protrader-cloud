@@ -317,6 +317,7 @@ with st.sidebar:
     st.markdown("### ◆ PROTRADER AI")
     lang_name = st.segmented_control("🌐", list(i18n.LANGS), default="English", key="lang") or "English"
     i18n.set_lang(i18n.LANGS[lang_name])
+    simple = st.toggle(T("Simple view"), value=True, help=T("Only the most profitable signal and its reasons. Turn off for the full terminal."))
     symbol = st.selectbox(T("Instrument"), list(INSTRUMENTS), index=list(INSTRUMENTS).index("EURUSD"))
     tf = st.segmented_control(T("Timeframe"), list(TIMEFRAMES), default="M15") or "M15"
     lot_size = st.number_input(T("Lots (size 100000)"), 0.0, 100.0, 0.0, step=0.01, format="%.2f",
@@ -1469,6 +1470,101 @@ def board_card(res):
     return f"<div class='hud' style='margin:0'>{head}{body}{foot}</div>"
 
 
+REASONS = {
+    "eur_a": ["EURUSD is in a clear trend (it is on one side of its 200-hour average)",
+              "Price just made a sharp, extreme move against that trend - these usually snap back",
+              "No news spike in the last 3 hours", "Not a break of the recent range (no new 30-candle low/high)",
+              "Only the euro moved, not the whole US dollar (GBPUSD stayed calm)"],
+    "eur_r3": ["EURUSD's hourly and daily trends point the same way",
+               "RSI(2) moved against the trend 3 candles in a row to an extreme - a pullback inside the trend",
+               "No news spike in the last 3 hours", "Not a break of the recent range",
+               "Only the euro moved, not the whole US dollar (GBPUSD stayed calm)"],
+    "gold_a": ["Gold is in an uptrend on both the hourly and the daily chart",
+               "Price just made a deep, fast dip (RSI(2) under 2) - in an uptrend these usually bounce",
+               "No news spike in the last 3 hours", "Not a break of the recent range",
+               "Only gold moved, not the whole US dollar (EURUSD stayed calm)"],
+    "gold_pull": ["Gold's daily trend is up (above its 50-day average)",
+                  "On the hourly chart the fast average (EMA20) is above the slow one (EMA50): the trend is up",
+                  "Price pulled back to EMA20 and closed back above it with a strong candle - the trend is resuming",
+                  "No fixed target: the stop follows price up, so a big trend move can pay many times the risk"],
+    "gold_pro": ["Gold's 4-hour and daily trends agree", "The market is trending (ADX at least 20) during active hours",
+                 "Price pulled back to EMA20 and a confirmation candle closed in the trend direction",
+                 "No fixed target: the stop follows price, so big moves are kept"],
+}
+REASONS["gold_a15"] = REASONS["gold_a"]
+
+
+def simple_view():
+    """One big card: the most profitable signal now (or the closest one) with plain reasons, then a short ranked list."""
+    res = [r for r in board_results(source, int(time.time() // 300)) if "error" not in r]
+    if not res:
+        st.warning(T("No market data right now - try again in a minute."))
+        return
+    pm = lambda r: (r["stats"] or {}).get("avg_r", 0) * (r["stats"] or {}).get("per_month", 0)
+    star = lambda r: "★★★" if pm(r) >= 0.8 else "★★☆" if pm(r) >= 0.3 else "★☆☆"
+    res.sort(key=lambda r: (not r["open"], -pm(r)))
+    live_ = [r for r in res if r["open"]]
+    ready = lambda r: r["meter"]["met"] / r["meter"]["total"]
+    near = [r for r in res if ready(r) >= 0.6]                   # most profitable among the ones that are getting close
+    best = live_[0] if live_ else max(near or res, key=lambda r: (pm(r), ready(r)))
+    p, s_, t = best["plan"], best["stats"] or {}, best["open"]
+    inst_ = INSTRUMENTS[p["sym"]]
+    f_ = lambda v: f"{v:,.{inst_.digits}f}"
+    market = "GOLD" if p["sym"] == "XAUUSD" else p["sym"]
+    ratio = abs(s_.get("avg_win", 0) / s_["avg_loss"]) if s_.get("avg_loss") else 0
+    tested = (T("Tested 10 years: about +{m}% of your account a month at 1% risk per trade · wins {w}% of trades · "
+                "the average win is {x}× the average loss", m=f"{pm(best):.1f}", w=f"{s_.get('win', 0):.0f}", x=f"{ratio:.1f}")
+              if s_ else "")
+    if t:
+        buy = t["side"] == 1
+        col = UP if buy else DOWN
+        e, stop = t["entry"], t.get("stop_now", t["stop0"])
+        ps = position_size(p["sym"], e, t["stop0"], balance, risk_pct, int(leverage), lot_size)
+        lv = [(T("Entry"), f_(e)), (T("Stop loss"), f_(stop))]
+        for k, ((v, _, pct), hit) in enumerate(zip(t.get("tps") or [], t.get("tp_hit") or []), 1):
+            lv.append((f"TP{k}" + (" · " + T("close half") if k == 1 else ""), f_(v) + (" ✓" if hit else "")))
+        if not t.get("tps"):
+            lv.append((T("Target"), T("trailing stop - move the stop up each hour")))
+        head = (f"<div class='act' style='font-size:2.3rem;color:{col};text-shadow:0 0 18px {col}66'>"
+                f"{T('BUY') if buy else T('SELL')} {market}</div>"
+                f"<div class='txt'>{T(p['name'])} · {T('signal since')} {t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]):%m-%d %H:%M} UTC · "
+                f"{T('now')} {t.get('open_r', 0):+.2f}R</div>")
+        levels = "".join(f"<div style='display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #16233a'>"
+                         f"<span class='txt muted'>{a}</span><b class='mono'>{b}</b></div>" for a, b in lv)
+        levels += (f"<div class='txt muted' style='margin-top:6px'>{ps['lots']:.2f} {T('lot')} · {T('risk')} &#36;{ps['risk_usd']:,.2f}"
+                   f" ({ps['actual_risk_pct']}%)</div>")
+        why_t = T("Why this signal")
+    else:
+        m = best["meter"]
+        head = (f"<div class='act' style='font-size:2.1rem;color:{hud.AMBER}'>{T('WAIT')} · {T('no signal right now')}</div>"
+                f"<div class='txt'>{T('Closest')}: <b>{market} · {T(p['name'])}</b> · {T(m['side'])} {T('setup')} {m['met']}/{m['total']}</div>")
+        levels = (f"<div style='height:9px;background:#16233a;border-radius:6px;margin:10px 0'><div style='width:{round(100 * m['met'] / m['total'])}%;"
+                  f"height:100%;background:{hud.AMBER};border-radius:6px'></div></div>"
+                  + "".join(f"<div class='txt' style='padding:2px 0'>{'✅' if ok else '⏳'} {T(n)}"
+                            f"{(' · <span class=muted>' + v + '</span>') if v else ''}</div>" for n, ok, v in m["items"]))
+        why_t = T("How this signal works")
+    reasons = "".join(f"<li class='txt' style='margin:3px 0'>{T(x)}</li>" for x in REASONS.get(p["id"], []))
+    st.markdown(f"""<div class='hud verdict' style='padding:18px'>
+  <div style='display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap'>
+    <div class='hud-t'>{T('Most profitable signal')}</div><b style='color:{hud.AMBER}'>{T('Profit')} {star(best)}</b></div>
+  {head}
+  <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:10px'>
+    <div>{levels}</div>
+    <div><div class='lbl'>{why_t}</div><ul style='margin:6px 0 0 18px;padding:0'>{reasons}</ul></div>
+  </div>
+  <div class='txt muted' style='margin-top:10px;font-size:12px'>{tested}</div>
+</div>""", unsafe_allow_html=True)
+    rows = ""
+    for r in res:
+        pr, mr = r["plan"], r["meter"]
+        status = (f"<b style='color:{UP if r['open']['side'] == 1 else DOWN}'>{T('BUY') if r['open']['side'] == 1 else T('SELL')}</b>"
+                  if r["open"] else f"{T('WAIT')} {mr['met']}/{mr['total']}")
+        rows += (f"<tr><td style='color:{hud.AMBER}'>{star(r)}</td><td>{'GOLD' if pr['sym'] == 'XAUUSD' else pr['sym']} · {T(pr['name'])}</td>"
+                 f"<td class='mono' style='text-align:right'>{status}</td></tr>")
+    st.markdown(f"<div class='hud' style='margin-top:10px'><div class='hud-t'>{T('All signals · most profitable first')}</div>"
+                f"<table style='width:100%;font-size:14px'>{rows}</table></div>", unsafe_allow_html=True)
+
+
 def signal_board():
     res = board_results(source, int(time.time() // 300))
     cards = "".join(board_card(r) for r in res)
@@ -1517,79 +1613,85 @@ def market_panel():
     st.markdown(hud.header(symbol, tf, fmt(live_px, D), chg, cells, "fallback" not in S["src"], sess, sstate, labels),
                 unsafe_allow_html=True)
     check_price_alerts(live_px)
-    signal_board()
+    if simple:
+        simple_view()
+        more = st.expander(T("Chart & full analysis"))
+    else:
+        signal_board()
+        more = st.container()
+    with more:
 
-    if "fallback" in S["src"]:
-        st.warning(T("TradingView feed unavailable - showing {src}. Prices can differ from Pepperstone; re-run Analyze when the feed is back.",
-                     src=S["src"].split(" (")[0]))
-    danger = newsmod.upcoming_high_impact(S["events"], 60)
-    if danger:
-        st.warning(T("High-impact news soon: ") + " · ".join(f"{e['time']:%H:%M} UTC {e['ccy']} {e['title']}" for e in danger))
-    if guard["blocked"]:
-        st.error(T("Risk guard: {why}. Signals are switched to WAIT for the rest of the day.", why=guard["why"]))
-    if tf == "M5" and STRAT not in MR_TF:
-        st.info(T("M5 failed the unseen-data test (it looked good on past data, then lost). Use it to watch price; take trades from M15."))
-    if PLAN_MODE and STRAT:
-        alert_plan_events(plan_state(symbol, tf, source, STRAT, S["frames"][tf].index[-1]))
-    elif S["scalp"]:
-        alert_new_setups(S["setups"])
-    if test_alert:
-        fire_alert("ProTrader · " + T("Test alert"), T("If you hear the alarm and see this banner, alerts work."))
-        st.toast(T("Test alert sent - you should hear an alarm and see a big banner."), icon="🔔")
+        if "fallback" in S["src"]:
+            st.warning(T("TradingView feed unavailable - showing {src}. Prices can differ from Pepperstone; re-run Analyze when the feed is back.",
+                         src=S["src"].split(" (")[0]))
+        danger = newsmod.upcoming_high_impact(S["events"], 60)
+        if danger:
+            st.warning(T("High-impact news soon: ") + " · ".join(f"{e['time']:%H:%M} UTC {e['ccy']} {e['title']}" for e in danger))
+        if guard["blocked"]:
+            st.error(T("Risk guard: {why}. Signals are switched to WAIT for the rest of the day.", why=guard["why"]))
+        if tf == "M5" and STRAT not in MR_TF:
+            st.info(T("M5 failed the unseen-data test (it looked good on past data, then lost). Use it to watch price; take trades from M15."))
+        if PLAN_MODE and STRAT:
+            alert_plan_events(plan_state(symbol, tf, source, STRAT, S["frames"][tf].index[-1]))
+        elif S["scalp"]:
+            alert_new_setups(S["setups"])
+        if test_alert:
+            fire_alert("ProTrader · " + T("Test alert"), T("If you hear the alarm and see this banner, alerts work."))
+            st.toast(T("Test alert sent - you should hear an alarm and see a big banner."), icon="🔔")
 
-    sig = st.session_state.get(key)
-    left, right = st.columns([2.35, 1], gap="medium")
-    with left:
-        st.plotly_chart(make_chart(S, sig), use_container_width=True, config=CHART_CONFIG)
-        c_a, c_b = st.columns([1, 5])
-        if c_a.button(T("Reset view"), key="reset_view", use_container_width=True):
-            st.session_state["chart_rev"] = st.session_state.get("chart_rev", 0) + 1
-            st.rerun(scope="fragment")
-        c_b.caption(T("Drag to pan · mouse wheel to zoom · double-click chart to reset"))
-    with right:
-        if PLAN_MODE:
-            P = plan_state(symbol, tf, source, STRAT, S["frames"][tf].index[-1]) if STRAT else None
-            st.markdown(plan_verdict_html(sig, S, P), unsafe_allow_html=True)
-        else:
-            st.markdown(verdict_html(sig, S), unsafe_allow_html=True)
+        sig = st.session_state.get(key)
+        left, right = st.columns([2.35, 1], gap="medium")
+        with left:
+            st.plotly_chart(make_chart(S, sig), use_container_width=True, config=CHART_CONFIG)
+            c_a, c_b = st.columns([1, 5])
+            if c_a.button(T("Reset view"), key="reset_view", use_container_width=True):
+                st.session_state["chart_rev"] = st.session_state.get("chart_rev", 0) + 1
+                st.rerun(scope="fragment")
+            c_b.caption(T("Drag to pan · mouse wheel to zoom · double-click chart to reset"))
+        with right:
+            if PLAN_MODE:
+                P = plan_state(symbol, tf, source, STRAT, S["frames"][tf].index[-1]) if STRAT else None
+                st.markdown(plan_verdict_html(sig, S, P), unsafe_allow_html=True)
+            else:
+                st.markdown(verdict_html(sig, S), unsafe_allow_html=True)
 
-    g = gauges_html(S)
-    cols = st.columns([1] * len(g) + [1.9], gap="small")
-    for c, html in zip(cols, g):
-        c.markdown(html, unsafe_allow_html=True)
-    items = plan_checklist(S, P if PLAN_MODE else None) if PLAN_MODE else checklist_items(S, sig)
-    cols[-1].markdown(hud.checklist(items, T("Pre-trade checklist · {ok}/{n} green")), unsafe_allow_html=True)
+        g = gauges_html(S)
+        cols = st.columns([1] * len(g) + [1.9], gap="small")
+        for c, html in zip(cols, g):
+            c.markdown(html, unsafe_allow_html=True)
+        items = plan_checklist(S, P if PLAN_MODE else None) if PLAN_MODE else checklist_items(S, sig)
+        cols[-1].markdown(hud.checklist(items, T("Pre-trade checklist · {ok}/{n} green")), unsafe_allow_html=True)
 
-    board = get_board()
-    if board:
-        cells = "".join(f"<span>{x['name']} <b style='color:{UP if x['chg_24h'] >= 0 else DOWN}'>{x['chg_24h']:+.2f}%</b></span>"
-                        for x in board)
-        st.markdown(f"<div class='hud' style='margin-top:10px;padding:9px 16px'><div class='macro'>"
-                    f"<span class='hud-t' style='margin:0'>{T('Macro 24h')}</span>{cells}</div></div>", unsafe_allow_html=True)
+        board = get_board()
+        if board:
+            cells = "".join(f"<span>{x['name']} <b style='color:{UP if x['chg_24h'] >= 0 else DOWN}'>{x['chg_24h']:+.2f}%</b></span>"
+                            for x in board)
+            st.markdown(f"<div class='hud' style='margin-top:10px;padding:9px 16px'><div class='macro'>"
+                        f"<span class='hud-t' style='margin:0'>{T('Macro 24h')}</span>{cells}</div></div>", unsafe_allow_html=True)
 
-    if PLAN_MODE and STRAT and P and P["trades"]:
-        st.markdown("##### " + T("Recent trades of this strategy"))
-        rows_ = [{T("Time"): f"{t['time']:%m-%d %H:%M}", T("Side"): T("LONG" if t["side"] == 1 else "SHORT"),
-                  T("Entry"): round(t["entry"], D), T("Initial stop"): round(t["stop0"], D),
-                  T("Exit"): round(t["exit"], D) if t.get("exit") is not None else "⏳",
-                  "R": round(t.get("open_r", t["r"]) if t.get("exit_i") is None else t["r"], 2)} for t in P["trades"][::-1][:12]]
-        st.dataframe(pd.DataFrame(rows_), hide_index=True, use_container_width=True)
-    if S["scalp"] and not PLAN_MODE:
-        st.markdown("##### " + T("Setup radar"))
-        if S["setups"]:
-            rad = pd.DataFrame(as_dicts(S["setups"]))[["grade", "side", "name", "order_type", "entry", "stop", "tp1", "tp2", "rr_tp2", "trigger"]]
-            rad["grade"] = rad["grade"].map(quality_word)
-            rad.insert(3, "edge", [edge_txt(getattr(x, "edge", None)) for x in S["setups"]])
-            rad.insert(4, "similar", [similar_txt(getattr(x, "quality", None)) for x in S["setups"]])
-            rad["side"] = rad["side"].map(side_txt)
-            rad["name"] = rad["name"].map(setup_name)
-            rad["order_type"] = rad["order_type"].map(order_txt)
-            rad.columns = [T("Quality"), T("Side"), T("Setup"), T("Backtest"), T("Similar past setups"), T("Order"), T("Entry"), T("Stop"), "TP1", "TP2",
-                           "R (TP2)", T("Trigger")]
-            st.dataframe(rad, hide_index=True, use_container_width=True,
-                         column_config={T("Trigger"): st.column_config.TextColumn(width="large")})
-        else:
-            st.caption(T("Nothing clean right now. No sweep, no VWAP retest, no fresh break. Waiting is a position."))
+        if PLAN_MODE and STRAT and P and P["trades"]:
+            st.markdown("##### " + T("Recent trades of this strategy"))
+            rows_ = [{T("Time"): f"{t['time']:%m-%d %H:%M}", T("Side"): T("LONG" if t["side"] == 1 else "SHORT"),
+                      T("Entry"): round(t["entry"], D), T("Initial stop"): round(t["stop0"], D),
+                      T("Exit"): round(t["exit"], D) if t.get("exit") is not None else "⏳",
+                      "R": round(t.get("open_r", t["r"]) if t.get("exit_i") is None else t["r"], 2)} for t in P["trades"][::-1][:12]]
+            st.dataframe(pd.DataFrame(rows_), hide_index=True, use_container_width=True)
+        if S["scalp"] and not PLAN_MODE:
+            st.markdown("##### " + T("Setup radar"))
+            if S["setups"]:
+                rad = pd.DataFrame(as_dicts(S["setups"]))[["grade", "side", "name", "order_type", "entry", "stop", "tp1", "tp2", "rr_tp2", "trigger"]]
+                rad["grade"] = rad["grade"].map(quality_word)
+                rad.insert(3, "edge", [edge_txt(getattr(x, "edge", None)) for x in S["setups"]])
+                rad.insert(4, "similar", [similar_txt(getattr(x, "quality", None)) for x in S["setups"]])
+                rad["side"] = rad["side"].map(side_txt)
+                rad["name"] = rad["name"].map(setup_name)
+                rad["order_type"] = rad["order_type"].map(order_txt)
+                rad.columns = [T("Quality"), T("Side"), T("Setup"), T("Backtest"), T("Similar past setups"), T("Order"), T("Entry"), T("Stop"), "TP1", "TP2",
+                               "R (TP2)", T("Trigger")]
+                st.dataframe(rad, hide_index=True, use_container_width=True,
+                             column_config={T("Trigger"): st.column_config.TextColumn(width="large")})
+            else:
+                st.caption(T("Nothing clean right now. No sweep, no VWAP retest, no fresh break. Waiting is a position."))
 
 
 # ---------------------------------------------------------------- analyze (AI) on demand
@@ -1662,7 +1764,8 @@ st.fragment(run_every=live_every if live else None)(market_panel)()
 # ---------------------------------------------------------------- detail tabs
 
 sig = st.session_state.get(key)
-t_an, t_tm, t_ctx, t_news, t_bt, t_scan, t_j = st.tabs([T("Analysis"), T("Time Machine"), T("Market structure"),
+_tabs_box = st.expander(T("More tools · Time Machine, news, backtest, journal")) if simple else st
+t_an, t_tm, t_ctx, t_news, t_bt, t_scan, t_j = _tabs_box.tabs([T("Analysis"), T("Time Machine"), T("Market structure"),
                                                          T("News & calendar"), T("Backtest"), T("Scanner"), T("Journal")])
 
 with t_tm:
