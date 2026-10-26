@@ -423,7 +423,7 @@ S.update({
     'signal since': ('дохио эхэлсэн', '信号开始于'),
     'now': ('одоо', '现在'),
     'close half': ('талыг хаа', '平一半'),
-    'trailing stop - move the stop up each hour': ('дагах стоп - стопыг цаг бүр дээшлүүл', '移动止损 - 每小时上移止损'),
+    'trailing stop - after each hourly candle, move your stop to the Stop loss shown here': ('дагах стоп - цагийн лаа бүрийн дараа стопоо энд харагдах Stop loss руу шилжүүл', '移动止损 - 每根小时 K 线收盘后，把止损移到这里显示的止损价'),
     'lot': ('лот', '手'),
     'risk': ('эрсдэл', '风险'),
     'All signals · most profitable first': ('Бүх дохио · хамгийн ашигтай нь эхэндээ', '所有信号 · 最赚钱的在前'),

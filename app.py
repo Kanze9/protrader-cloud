@@ -1703,7 +1703,7 @@ def simple_view(S=None):
         for k, ((v, _, pct), hit) in enumerate(zip(t.get("tps") or [], t.get("tp_hit") or []), 1):
             lv.append((f"TP{k}" + (" · " + T("close half") if k == 1 else ""), f_(v) + (" ✓" if hit else "")))
         if not t.get("tps"):
-            lv.append((T("Target"), T("trailing stop - move the stop up each hour")))
+            lv.append((T("Target"), T("trailing stop - after each hourly candle, move your stop to the Stop loss shown here")))
         head = (f"<div class='act' style='font-size:2.3rem;color:{col};text-shadow:0 0 18px {col}66'>"
                 f"{T('BUY') if buy else T('SELL')} {market}</div>"
                 f"<div class='txt'>{T(p['name'])} · {T('signal since')} {t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]):%m-%d %H:%M} UTC · "
