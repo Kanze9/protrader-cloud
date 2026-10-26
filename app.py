@@ -1574,6 +1574,11 @@ def proof_card(res):
         if not pick:
             return
         tier = {r["plan"]["id"]: r["plan"]["tier"] for r in res}
+
+        def _tested_mix():
+            st.session_state["proof_rb"], st.session_state["proof_ra"] = 1.0, 2.0
+        st.button(T("Use the tested mix: 1% on trend signals, 2% on high-accuracy signals"), on_click=_tested_mix, key="proof_mix",
+                  help=T("In the 10-year tests this gave the best profit for the drawdown. More risk = more profit AND deeper drops."))
         c1, c2 = st.columns(2)
         risk_b = c1.slider(T("Risk on trend signals %"), 0.25, 3.0, float(risk_pct), 0.25, key="proof_rb",
                            help=T("Gold trend pullback: wins about 1 in 3, but the wins are big (trailing stop)."))

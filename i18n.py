@@ -514,6 +514,8 @@ S.update({
     '4H trend agrees': ('4 цагийн тренд нийцэж байна', '4 小时趋势一致'),
     'Closed above the 7-day high': ('7 хоногийн дээд цэгээс дээш хаагдсан', '收于 7 日最高价之上'),
     'Closed below the 7-day low': ('7 хоногийн доод цэгээс доош хаагдсан', '收于 7 日最低价之下'),
+    'Use the tested mix: 1% on trend signals, 2% on high-accuracy signals': ('Туршсан хослол: трендийн дохионд 1%, өндөр нарийвчлалтай дохионд 2%', '使用测试组合：趋势信号 1%，高胜率信号 2%'),
+    'In the 10-year tests this gave the best profit for the drawdown. More risk = more profit AND deeper drops.': ('10 жилийн тестэд энэ нь уналттай харьцуулахад хамгийн сайн ашиг өгсөн. Их эрсдэл = их ашиг БА гүн уналт.', '在 10 年测试中，这个组合的收益/回撤比最好。风险越大 = 利润越多，回撤也越深。'),
     "Lots (size 100000)": ("Лот (хэмжээ 100000)", "手数（每手 100000）"),
     "Your trade size, like the TradingView order panel. 0 = let the app size it from your balance and risk %.":
         ("Таны арилжааны хэмжээ, TradingView-ийн захиалгын самбар шиг. 0 = үлдэгдэл ба эрсдэлийн %-аас апп тооцно.",
