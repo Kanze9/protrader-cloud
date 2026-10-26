@@ -27,6 +27,7 @@ import quality
 import seasonal
 import orb_tool
 import timemachine
+import zones as zones_mod
 import macro
 import news as newsmod
 from ai_brain import ai_signal, as_list, merge_signals, provider_key, rule_based_signal, scalp_rule_signal
@@ -330,10 +331,10 @@ with st.sidebar:
         st.caption(T("Pip value: {v} USD", v=f"{lot_size * _inst.pip * _inst.contract_size:,.2f}"))
     else:
         st.caption(T("Pip value shown in the signal panel"))
-    LAYERS = ["EMA 20/50", "EMA 200", "VWAP", "Bollinger Bands", "Fibonacci", "Order blocks", "FVG & sweeps",
+    LAYERS = ["Strength zones", "EMA 20/50", "EMA 200", "VWAP", "Bollinger Bands", "Fibonacci", "Order blocks", "FVG & sweeps",
               "Key levels", "Market structure"]
-    layers = st.multiselect(T("Chart indicators"), LAYERS, default=["EMA 20/50", "VWAP", "Order blocks", "FVG & sweeps",
-                                                                     "Key levels", "Market structure"], format_func=T)
+    layers = st.multiselect(T("Chart indicators"), LAYERS, default=["Strength zones", "EMA 20/50", "VWAP", "Key levels",
+                                                                     "Market structure"], format_func=T)
     lower_panel = st.segmented_control(T("Lower panel"), ["RSI", "Volume", "MACD"], default="RSI") or "RSI"
     show_struct = "Market structure" in layers
     st.caption(T("M15 = recommended scalping (backtested best) · M5 = fast scalping · H1+ = swing"))
@@ -522,6 +523,21 @@ def make_chart(S, sig):
                           row=1, col=1)
     if "Fibonacci" in layers:
         add_fibonacci(fig, initial, right)
+    if "Strength zones" in layers:
+        zres = zones_mod.find_zones(closed_only(df, tf))
+        for side_z, col_z in (("buy", "0,229,192"), ("sell", "255,77,109")):
+            zz = zres[side_z]
+            if not zz:
+                continue
+            fig.add_shape(type="rect", x0=max(zz["first_time"], view.index[0]), x1=right, y0=zz["bottom"], y1=zz["top"], row=1, col=1,
+                          fillcolor=f"rgba({col_z},.16)", line=dict(color=f"rgba({col_z},.8)", width=1.2), layer="below")
+            fig.add_annotation(x=right, y=zz["top"] if side_z == "sell" else zz["bottom"], xanchor="right",
+                               yanchor="bottom" if side_z == "sell" else "top", showarrow=False, row=1, col=1,
+                               text=f"{T('SELL ZONE') if side_z == 'sell' else T('BUY ZONE')} {zz['score']} · {T(zz['label'])} · "
+                                    f"{zz['reactions']} {T('reactions')}",
+                               bgcolor="rgba(10,22,38,.9)", bordercolor=f"rgb({col_z})", borderpad=3,
+                               font=dict(size=10, color=f"rgb({col_z})"))
+            lo, hi = min(lo, zz["bottom"]), max(hi, zz["top"])
     if ctx is not None:
         if "VWAP" in layers:
             fig.add_trace(go.Scatter(x=view.index, y=view.vwap, name="VWAP", line=dict(color=hud.AMBER, width=1.4, dash="dot")),
@@ -1495,7 +1511,31 @@ REASONS = {
 REASONS["gold_a15"] = REASONS["gold_a"]
 
 
-def simple_view():
+def zones_card(S):
+    """Buy / sell strength zones dashboard for the market on screen."""
+    z = zones_mod.find_zones(closed_only(S["frames"][tf], tf))
+    f_ = lambda v: f"{v:,.{D}f}"
+    def zone_html(zz, side_z, col_z):
+        if not zz:
+            return f"<div class='txt muted'>{T('No active zone')}</div>"
+        return (f"<div class='txt'><b style='color:{col_z}'>{T('BUY ZONE') if side_z == 'buy' else T('SELL ZONE')}</b> "
+                f"<span class='mono'>{f_(zz['bottom'])} – {f_(zz['top'])}</span></div>"
+                f"<div style='height:7px;background:#16233a;border-radius:5px;margin:4px 0'><div style='width:{zz['score']}%;height:100%;"
+                f"background:{col_z};border-radius:5px'></div></div>"
+                f"<div class='txt muted' style='font-size:12px'>{T('Strength')} {zz['score']}/99 · {T(zz['label'])} · "
+                f"{zz['reactions']} {T('reactions')}</div>")
+    near = (T("{side} zone, {d} ATR away", side=T(z["nearest"][0].upper()), d=f"{z['nearest'][1]:.1f}") if z.get("nearest") else "-")
+    st.markdown(f"""<div class='hud' style='margin-top:10px'>
+  <div class='hud-t'>{T('Strength zones')} · {symbol} {tf}</div>
+  <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px'>
+    <div>{zone_html(z['sell'], 'sell', DOWN)}</div><div>{zone_html(z['buy'], 'buy', UP)}</div>
+    <div class='txt'>{T('Trend')}: <b>{T(z['trend'])}</b><br>{T('Price')}: <b>{T(z['location'])}</b><br>{T('Nearest')}: <b>{near}</b></div>
+  </div>
+  <div class='txt muted' style='font-size:12px;margin-top:8px'>{T('Zones = places where price turned several times before. Tested 10 years: price reacted at them no more often than at random levels, so use them as a map and for targets, not as signals.')}</div>
+</div>""", unsafe_allow_html=True)
+
+
+def simple_view(S=None):
     """One big card: the most profitable signal now (or the closest one) with plain reasons, then a short ranked list."""
     res = [r for r in board_results(source, int(time.time() // 300)) if "error" not in r]
     if not res:
@@ -1564,6 +1604,8 @@ def simple_view():
                  f"<td class='mono' style='text-align:right'>{status}</td></tr>")
     st.markdown(f"<div class='hud' style='margin-top:10px'><div class='hud-t'>{T('All signals · most profitable first')}</div>"
                 f"<table style='width:100%;font-size:14px'>{rows}</table></div>", unsafe_allow_html=True)
+    if S is not None and "Strength zones" in layers:
+        zones_card(S)
 
 
 def signal_board():
@@ -1615,7 +1657,7 @@ def market_panel():
                 unsafe_allow_html=True)
     check_price_alerts(live_px)
     if simple:
-        simple_view()
+        simple_view(S)
         more = st.expander(T("Chart & full analysis"))
     else:
         signal_board()
