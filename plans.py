@@ -28,6 +28,7 @@ PLANS = [
     {"id": "gold_a15", "sym": "XAUUSD", "tf": "M15", "tier": "A", "kind": "mr", "strat": "mr_gold15", "peer": "EURUSD",
      "name": "Gold deep dip"},
     {"id": "gold_pull", "sym": "XAUUSD", "tf": "H1", "tier": "B", "kind": "pull", "name": "Gold trend pullback"},
+    {"id": "btc_brk", "sym": "BTCUSD", "tf": "H1", "tier": "B", "kind": "brk", "name": "Bitcoin 7-day breakout"},
     # gold_pro (Pro Pullback, kind "pro") left the board 2026-10-27: weaker in the newer years (PF 1.22), 7/11 years up,
     # often the opposite side of gold_pull, and it doubled the drawdown of the mix. The code below still supports it.
 ]
@@ -126,6 +127,83 @@ def pull_trades(h1: pd.DataFrame, sym: str = "XAUUSD") -> List[Dict]:
     return out
 
 
+# ---------------------------------------------------------------- Bitcoin 7-day breakout (both sides)
+# Dukascopy BTCUSD H1 2017-10 .. 2026-10, cost 0.04% of price, one trade at a time (research 2026-10-27):
+#   close above the highest close of the last 168 hours (7 days) with the daily (close vs 50-day average) and 4H trend up,
+#   or below the 7-day lowest close with both trends down. Stop 2xATR, then the stop trails 4xATR behind the best price.
+#   527 trades, 33% win, PF 1.69 (older 1.67, newer 1.72), +1.9R a month, worst drop 21R, 8 of 10 years up.
+#   Every neighbour (lookback 120-336 h x stop 1.5-3 / trail 3.5-6) was profitable in both halves (PF 1.6-2.1);
+#   double cost: PF 1.62; with ~0.055%/day overnight financing (trades last ~1 day): PF 1.61 in both halves.
+#   Beat all 30 runs of random entries with the same trend filters and exit (random median PF 1.40).
+#   The gold pullback rule on Bitcoin worked in the older years but faded lately (newer PF 1.0-1.3), so it is not used.
+
+BRK_BARS, BRK_STOP_ATR, BRK_TRAIL_ATR = 168, 2.0, 4.0
+COST_PCT = {"BTCUSD": 0.0004}              # spread as a share of price (crypto spreads scale with the price)
+
+
+def brk_prepare(h1: pd.DataFrame) -> pd.DataFrame:
+    d = add_indicators(h1)
+    meanrev.add_daily_trend(d)
+    add_h4_trend(d, h1)
+    d["hh"] = d.close.rolling(BRK_BARS).max().shift(1)
+    d["ll"] = d.close.rolling(BRK_BARS).min().shift(1)
+    return d
+
+
+def brk_checks(d: pd.DataFrame, i: int) -> Dict:
+    c = d.close.iloc[i]
+    side = 1 if d.dtrend.iloc[i] == 1 else -1 if d.dtrend.iloc[i] == -1 else 0
+    res = {"side": side, "daily": side != 0, "h4": side != 0 and d.t4.iloc[i] == side,
+           "break": (side == 1 and c > d.hh.iloc[i]) or (side == -1 and c < d.ll.iloc[i]),
+           "level": float(d.hh.iloc[i] if side >= 0 else d.ll.iloc[i]), "close": float(c)}
+    res["signal"] = res["daily"] and res["h4"] and res["break"]
+    return res
+
+
+def brk_trades(h1: pd.DataFrame, sym: str = "BTCUSD") -> List[Dict]:
+    """7-day breakout with the daily + 4H trend -> enter at the close; stop 2xATR, trailing 4xATR (no fixed target)."""
+    d = brk_prepare(h1)
+    c, h, l, a = d.close.values, d.high.values, d.low.values, d.atr.values
+    out, i, n = [], 250, len(d)
+    while i < n:
+        ck = brk_checks(d, i)
+        if not ck["signal"]:
+            i += 1
+            continue
+        s_ = ck["side"]
+        e = c[i]
+        R = BRK_STOP_ATR * a[i]
+        cost = COST_PCT[sym] * e if sym in COST_PCT else SPREADS.get(sym, 0)
+        stop, best = e - s_ * R, e
+        path = [(d.index[i], stop)]
+        exit_i = None
+        for j in range(i + 1, min(n, i + 300)):
+            if (s_ == 1 and l[j] <= stop) or (s_ == -1 and h[j] >= stop):
+                exit_i = j
+                break
+            best = max(best, h[j]) if s_ == 1 else min(best, l[j])
+            stop = max(stop, best - BRK_TRAIL_ATR * a[j]) if s_ == 1 else min(stop, best + BRK_TRAIL_ATR * a[j])
+            path.append((d.index[j], stop))
+        tr = {"i": i, "time": d.index[i], "side": s_, "entry": float(e), "stop0": float(e - s_ * R), "tier": "7-day breakout"}
+        if exit_i is None and i + 300 < n:
+            j = i + 299
+            tr.update(exit_i=j, exit=float(c[j]), exit_time=d.index[j], open=False, stop_now=float(stop),
+                      r=(c[j] - e) * s_ / R - cost / R, path=path)
+            out.append(tr)
+            i = j + 1
+            continue
+        if exit_i is None:
+            tr.update(exit_i=None, exit=None, exit_time=None, open=True, stop_now=float(stop),
+                      r=(c[-1] - e) * s_ / R, open_r=(c[-1] - e) * s_ / R, path=path + [(d.index[-1], stop)])
+            out.append(tr)
+            break
+        tr.update(exit_i=exit_i, exit=float(stop), exit_time=d.index[exit_i], open=False, stop_now=float(stop),
+                  r=(stop - e) * s_ / R - cost / R, path=path + [(d.index[exit_i], stop)])
+        out.append(tr)
+        i = exit_i + 1
+    return out
+
+
 # ---------------------------------------------------------------- meters
 
 def _meter(side: str, items: List, note: str = "") -> Dict:
@@ -171,6 +249,13 @@ def pull_meter(c: Dict) -> Dict:
                           ("Bullish candle", c["bull"], "")])
 
 
+def brk_meter(c: Dict) -> Dict:
+    side = "BUY" if c["side"] == 1 else "SELL" if c["side"] == -1 else "—"
+    word = "above the 7-day high" if c["side"] >= 0 else "below the 7-day low"
+    return _meter(side, [("Daily trend clear (50-day average)", c["daily"], side), ("4H trend agrees", c["h4"], ""),
+                         ("Closed " + word, c["break"], f"{c['close']:,.0f} vs {c['level']:,.0f}")])
+
+
 def pro_meter(c: Dict, daily: int, monday: bool) -> Dict:
     side = "BUY" if c["trend"] == 1 else "SELL" if c["trend"] == -1 else "—"
     return _meter(side, [("4H trend clear", bool(c["trend"]), side), ("Daily trend agrees", bool(c["trend"]) and daily == c["trend"], ""),
@@ -201,6 +286,10 @@ def run_plan(plan: Dict, get: Callable[[str, str], Optional[pd.DataFrame]]) -> D
         if plan["strat"] == "mr_gold15":
             meanrev.add_h1_trend(dm, trend_src)
         meter = mr_meter(plan, meanrev.checks(dm, len(dm) - 1, plan["strat"]))
+    elif plan["kind"] == "brk":
+        trades = brk_trades(d_raw, sym)
+        dm = brk_prepare(d_raw)
+        meter = brk_meter(brk_checks(dm, len(dm) - 1))
     elif plan["kind"] == "pull":
         trades = pull_trades(d_raw, sym)
         dm = pull_prepare(d_raw)

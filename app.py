@@ -1509,6 +1509,10 @@ REASONS = {
                  "Price pulled back to EMA20 and a confirmation candle closed in the trend direction",
                  "No fixed target: the stop follows price, so big moves are kept"],
 }
+REASONS["btc_brk"] = ["Bitcoin's daily trend and 4-hour trend point the same way",
+                      "Price closed beyond its 7-day high (buy) or 7-day low (sell) - a breakout in the trend direction",
+                      "Bitcoin and gold almost never move together, so this adds profit without adding the same risk",
+                      "No fixed target: the stop follows price 4×ATR behind, so big crypto moves are kept"]
 REASONS["gold_a15"] = REASONS["gold_a"]
 
 
@@ -1657,6 +1661,13 @@ def recent_card(res):
                     unsafe_allow_html=True)
 
 
+def _years(s_):
+    try:
+        return round((pd.Timestamp(s_["to"]) - pd.Timestamp(s_["from"])).days / 365.25)
+    except (KeyError, ValueError, TypeError):
+        return 10
+
+
 def simple_view(S=None):
     """One big card: the most profitable signal now (or the closest one) with plain reasons, then a short ranked list."""
     res = [r for r in board_results(source, int(time.time() // 300)) if "error" not in r]
@@ -1675,8 +1686,8 @@ def simple_view(S=None):
     f_ = lambda v: f"{v:,.{inst_.digits}f}"
     market = "GOLD" if p["sym"] == "XAUUSD" else p["sym"]
     ratio = abs(s_.get("avg_win", 0) / s_["avg_loss"]) if s_.get("avg_loss") else 0
-    tested = (T("Tested 10 years: about +{m}% of your account a month at 1% risk per trade · wins {w}% of trades · "
-                "the average win is {x}× the average loss", m=f"{pm(best):.1f}", w=f"{s_.get('win', 0):.0f}", x=f"{ratio:.1f}")
+    tested = (T("Tested {y} years: about +{m}% of your account a month at 1% risk per trade · wins {w}% of trades · "
+                "the average win is {x}× the average loss", y=_years(s_), m=f"{pm(best):.1f}", w=f"{s_.get('win', 0):.0f}", x=f"{ratio:.1f}")
               if s_ else "")
     if t:
         buy = t["side"] == 1

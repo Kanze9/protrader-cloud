@@ -62,7 +62,7 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
     pip_usd = ps["pip_value_usd"]
     pips = lambda v: abs(v - e) / inst.pip
     # distance as traders say it: pips for FX, dollars of price for gold
-    dist = (lambda v: f"${abs(v - e):,.2f} price move") if sym == "XAUUSD" else (lambda v: f"{pips(v):.0f} pips")
+    dist = (lambda v: f"${abs(v - e):,.2f} price move") if sym in ("XAUUSD", "BTCUSD") else (lambda v: f"{pips(v):.0f} pips")
     when = t["time"] + pd.Timedelta(minutes=tf_minutes)       # signal is known when its candle closes
     tfname = "H1" if tf_minutes == 60 else f"M{tf_minutes}"
     tier = (plan or {}).get("tier", "A")
@@ -81,12 +81,14 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
         rows.append(("Final exit", f(t.get("target_now", e)),
                      f"close the rest when a {tfname} candle closes back {'above' if buy else 'below'} the 5-candle average"))
     else:
-        rows.append(("Exit", "trailing stop", "no fixed TP: the stop follows 3.5×ATR behind the best price - move it up after "
+        trail = {"brk": 4.0}.get((plan or {}).get("kind"), 3.5)
+        rows.append(("Exit", "trailing stop", f"no fixed TP: the stop follows {trail:g}×ATR behind the best price - move it after "
                                               "each candle (the signal page shows the current stop)"))
         if stats:
             rows.append(("Typical", f"{stats['win']:.0f}% win", f"avg win {stats.get('avg_win', 0):+.1f}R · avg loss "
                                                                f"{stats.get('avg_loss', 0):+.1f}R (R = your stop distance)"))
-    per_move = f"$1 move = ${pip_usd * 10:,.2f}" if sym == "XAUUSD" else f"pip value ${pip_usd:,.2f}"
+    per_move = (f"$1 move = ${pip_usd * 10:,.2f}" if sym == "XAUUSD" else f"$100 move = ${pip_usd * 100:,.2f}" if sym == "BTCUSD"
+                else f"pip value ${pip_usd:,.2f}")
     rows.append(("Size", f"{ps['lots']:.2f} lot", f"{per_move} · margin ${ps['margin_usd']:,.2f} at 1:{leverage}"))
     skip = (f"Skip it if price is already {'above' if buy else 'below'} TP1 ({f(t['tps'][0][0])}) or "
             f"{'below' if buy else 'above'} the stop ({f(s0)})."
@@ -94,7 +96,7 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
     years = round((pd.Timestamp(stats["to"]) - pd.Timestamp(stats["from"])).days / 365.25) if stats and "from" in stats else 10
     tested = (f"Tested {years} years: {stats['n']} trades, win {stats['win']:.0f}%, PF {stats['pf']:.2f}"
               f" (older {stats.get('pf_train', 0):.2f} / newer {stats.get('pf_test', 0):.2f}). "
-              f"Assumes {'~$0.25/oz' if sym == 'XAUUSD' else '~0.9 pip'} cost (Razor)."
+              f"Assumes {'~$0.25/oz' if sym == 'XAUUSD' else '~0.04% of price' if sym == 'BTCUSD' else '~0.9 pip'} cost."
               if stats else "")
     news_txt = "; ".join(f"{n['time']:%H:%M} UTC {n.get('ccy', '')} {n.get('title', '')}" for n in news)
     warn = f"HIGH-IMPACT NEWS SOON: {news_txt} - wait until it is out." if news else "No high-impact news in the next hour."

@@ -1,7 +1,7 @@
 """10-year stats for every plan in plans.PLANS, from the Dukascopy history in models/ (fetch_dukascopy.py).
 
 Run:  .venv\\Scripts\\python build_plan_stats.py      (updates the plan|<id> entries in models/strategy_stats.json)
-H1 plans use ~10 years of H1; M15 plans use what models/duka_<sym>_M15.pkl holds. Razor-like costs, one trade at a time,
+H1 plans use ~10 years of H1 (Bitcoin from 2017-10); M15 plans use what models/duka_<sym>_M15.pkl holds. Razor-like costs, one trade at a time,
 closed candles only. pf_train / pf_test = older 60% / newer 40% of the trades. Also stores the closed trades' (time, R)
 so the app can draw each plan's equity curve.
 """

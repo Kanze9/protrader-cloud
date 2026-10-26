@@ -2,8 +2,8 @@ name: EURUSD signals
 
 on:
   schedule:
-    # GitHub often skips scheduled runs, so ask 3 times an hour (about 1,700 free minutes a month)
-    - cron: "3,23,43 * * * 0-5"
+    # GitHub often skips scheduled runs, so ask twice an hour, every day (Bitcoin trades at weekends; ~1,460 free minutes a month)
+    - cron: "3,33 * * * *"
   workflow_dispatch: {}          # "Run workflow" button for a manual check
 
 concurrency:

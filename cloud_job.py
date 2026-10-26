@@ -18,7 +18,8 @@ from config import INSTRUMENTS, TIMEFRAMES
 from notify import email_ready, send_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-COST_NOTE = {"EURUSD": "assumes ~0.9 pip cost (Razor)", "XAUUSD": "assumes ~$0.25/oz cost (Razor)"}
+COST_NOTE = {"EURUSD": "assumes ~0.9 pip cost (Razor)", "XAUUSD": "assumes ~$0.25/oz cost (Razor)",
+             "BTCUSD": "assumes ~0.04% of price cost"}
 CSS = """body{margin:0;background:#070b14;color:#dbe6f5;font-family:-apple-system,Segoe UI,Arial,sans-serif}
 .w{max-width:760px;margin:auto;padding:16px}h1{font-size:20px;letter-spacing:.08em;color:#4dd8ff;margin:4px 0 2px}
 h2{font-size:17px;letter-spacing:.06em;color:#4dd8ff;margin:24px 0 0}
@@ -77,14 +78,14 @@ def card(res: dict) -> str:
     p = res["plan"]
     pm = profit_month(res)
     tag = f"<span class='tag tA'>PROFIT {stars(pm)}</span>"
-    market = p["sym"].replace("XAUUSD", "Gold")
+    market = p["sym"].replace("XAUUSD", "Gold").replace("BTCUSD", "Bitcoin")
     title = p["name"] if p["name"].lower().startswith(market.lower()) else f"{market} · {p['name']}"
     head = f"<div class='hd'><b>{html.escape(title)} <span class='m'>({p['tf']})</span></b>{tag}</div>"
     if "error" in res:
         return f"<div class='card'>{head}<div class='bad'>No data this hour: {html.escape(res['error'][:150])}</div></div>"
     inst = INSTRUMENTS[p["sym"]]
     fmt = lambda x: f"{x:,.{inst.digits}f}"
-    dist = (lambda v, e: f"${abs(v - e):,.2f}") if p["sym"] == "XAUUSD" else (lambda v, e: f"{abs(v - e) / inst.pip:.0f} pips")
+    dist = (lambda v, e: f"${abs(v - e):,.2f}") if p["sym"] in ("XAUUSD", "BTCUSD") else (lambda v, e: f"{abs(v - e) / inst.pip:.0f} pips")
     mins = TIMEFRAMES[p["tf"]][1]
     t = res["open"]
     if t:
@@ -130,7 +131,7 @@ def render(results) -> str:
     ordered = sorted(results, key=lambda r: (not r.get("open"), -profit_month(r)))
     live = [r for r in ordered if r.get("open")]
     prices = " · ".join(f"{sym.replace('XAUUSD', 'GOLD')} {next((r['price'] for r in results if r['plan']['sym'] == sym and 'price' in r), 0):,.{INSTRUMENTS[sym].digits}f}"
-                        for sym in ("EURUSD", "XAUUSD"))
+                        for sym in ("EURUSD", "XAUUSD", "BTCUSD"))
     # APP_URL: the full app on Streamlit Cloud - the site opens it, and traderpro.gamer.free/?list keeps this list
     app = (os.environ.get("APP_URL") or "").strip()
     go = (f"<script>if(location.search.indexOf('list')<0)location.replace({json.dumps(app)});</script>" if app else "")
