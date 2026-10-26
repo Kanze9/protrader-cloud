@@ -63,10 +63,23 @@ def upload_ftp(page: str, state: dict):
         f.storbinary(f"STOR {os.environ.get('PAGE_NAME') or 'index.html'}", io.BytesIO(page.encode("utf-8")))
 
 
+def profit_month(res: dict) -> float:
+    """Tested profit per month in R (1R = one stop-loss), used to rank the signals."""
+    s = res.get("stats") or {}
+    return s.get("avg_r", 0) * s.get("per_month", 0)
+
+
+def stars(pm: float) -> str:
+    return "★★★" if pm >= 0.8 else "★★☆" if pm >= 0.3 else "★☆☆"
+
+
 def card(res: dict) -> str:
     p = res["plan"]
-    tag = f"<span class='tag t{p['tier']}'>{'A · HIGH ACCURACY' if p['tier'] == 'A' else 'B · TREND TRADE'}</span>"
-    head = f"<div class='hd'><b>{html.escape(p['name'])} <span class='m'>({p['tf']})</span></b>{tag}</div>"
+    pm = profit_month(res)
+    tag = f"<span class='tag tA'>PROFIT {stars(pm)}</span>"
+    market = p["sym"].replace("XAUUSD", "Gold")
+    title = p["name"] if p["name"].lower().startswith(market.lower()) else f"{market} · {p['name']}"
+    head = f"<div class='hd'><b>{html.escape(title)} <span class='m'>({p['tf']})</span></b>{tag}</div>"
     if "error" in res:
         return f"<div class='card'>{head}<div class='bad'>No data this hour: {html.escape(res['error'][:150])}</div></div>"
     inst = INSTRUMENTS[p["sym"]]
@@ -102,29 +115,31 @@ def card(res: dict) -> str:
                 "".join(f"<tr><td>{html.escape(n)}</td><td class='r {'ok' if ok else 'bad'}'>{'✓' if ok else '✗'} {html.escape(v)}</td></tr>"
                         for n, ok, v in m["items"]) + "</table></details>")
     s = res["stats"]
-    tested = (f"{s['n']} trades · win {s['win']:.0f}% · PF {s['pf']:.2f} (older {s['pf_train']:.2f} / newer {s['pf_test']:.2f}) · "
-              f"~{s['per_month']:.1f}/month · {COST_NOTE.get(p['sym'], '')}" if s else "")
+    years = round((pd.Timestamp(s["to"]) - pd.Timestamp(s["from"])).days / 365.25) if s else 0
+    tested = (f"Tested {years} years: ≈ +{pm:.1f}% of your account a month at 1% risk per trade · "
+              f"~{s['per_month']:.0f} signals a month · wins {s['win']:.0f}% of trades" if s else "")
     hist = [x for x in res["trades"] if not x.get("open")][-5:][::-1]
     hist_html = " ".join(f"<span class='{'ok' if x['r'] > 0 else 'bad'}'>{x['r']:+.2f}R</span>" for x in hist)
     return (f"<div class='card'>{head}{body}<div class='m' style='margin-top:8px'>Last results: {hist_html or 'none in view'}"
-            f"<br>Tested: {html.escape(tested)}</div></div>")
+            f"<br>{html.escape(tested)}</div></div>")
 
 
 def render(results) -> str:
     now = pd.Timestamp.now(tz="UTC")
-    secs = []
-    for sym, title in (("EURUSD", "EURUSD"), ("XAUUSD", "GOLD · XAUUSD")):
-        rs = [r for r in results if r["plan"]["sym"] == sym]
-        price = next((r["price"] for r in rs if "price" in r), None)
-        secs.append(f"<h2>{title}</h2><div class='m'>last close {f'{price:,.{INSTRUMENTS[sym].digits}f}' if price else '-'}</div>"
-                    + "".join(card(r) for r in rs))
+    # open trades first, then the most profitable plans
+    ordered = sorted(results, key=lambda r: (not r.get("open"), -profit_month(r)))
+    live = [r for r in ordered if r.get("open")]
+    prices = " · ".join(f"{sym.replace('XAUUSD', 'GOLD')} {next((r['price'] for r in results if r['plan']['sym'] == sym and 'price' in r), 0):,.{INSTRUMENTS[sym].digits}f}"
+                        for sym in ("EURUSD", "XAUUSD"))
+    secs = [f"<h2>{'SIGNALS NOW' if live else 'NO OPEN SIGNAL - WAITING'}</h2><div class='m'>{prices}</div>",
+            "".join(card(r) for r in ordered)]
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="300">
 <meta name="robots" content="noindex,nofollow"><title>ProTrader</title><style>{CSS}</style></head><body><div class="w">
 <h1>◆ PROTRADER</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · data refreshes every hour<br>
-<b class="ok">A</b> = high accuracy (83-91% win, small wins) · <b style="color:#ffb547">B</b> = trend trade (~40% win, trailing stop, bigger wins)</div>
+Most profitable first. ★★★ = earned the most in the 10-year test.</div>
 {''.join(secs)}
-<div class="card m">The setup meter shows how many of a plan's tested conditions are met now. A signal comes only at full.
+<div class="card m">The bar shows how close each signal is: a signal comes only when it is full. Practise on a demo account first.
 Testing / education only. Not financial advice.</div>
 </div></body></html>"""
 
