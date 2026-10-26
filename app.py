@@ -25,6 +25,7 @@ import plans
 import proplan
 import quality
 import seasonal
+import timemachine
 import macro
 import news as newsmod
 from ai_brain import ai_signal, as_list, merge_signals, provider_key, rule_based_signal, scalp_rule_signal
@@ -1661,8 +1662,64 @@ st.fragment(run_every=live_every if live else None)(market_panel)()
 # ---------------------------------------------------------------- detail tabs
 
 sig = st.session_state.get(key)
-t_an, t_ctx, t_news, t_bt, t_scan, t_j = st.tabs([T("Analysis"), T("Market structure"), T("News & calendar"),
-                                                   T("Backtest"), T("Scanner"), T("Journal")])
+t_an, t_tm, t_ctx, t_news, t_bt, t_scan, t_j = st.tabs([T("Analysis"), T("Time Machine"), T("Market structure"),
+                                                         T("News & calendar"), T("Backtest"), T("Scanner"), T("Journal")])
+
+with t_tm:
+    st.markdown(f"<div class='hud-t'>{T('Time Machine · replay a trade 10,000 times')}</div>", unsafe_allow_html=True)
+    st.caption(T("Each replay strings together random blocks of this market's real recent 15-minute candles, starting at your "
+                 "entry. It shows how wide the outcomes are - not which one will happen. The tested plan numbers are more reliable."))
+    tm_sym = st.segmented_control(T("Market"), ["EURUSD", "XAUUSD"], default=symbol if symbol in ("EURUSD", "XAUUSD") else "EURUSD",
+                                  key="tm_sym") or "EURUSD"
+    tm_inst = INSTRUMENTS[tm_sym]
+    tm_c = closed_only(get_candles(tm_sym, "M15", source)[0], "M15")
+    tm_px = float(tm_c.close.iloc[-1])
+    tm_atr = float(add_indicators(tm_c).atr.iloc[-1])
+    tm_open = next((r["open"] for r in board_results(source, int(time.time() // 300))
+                    if r.get("open") and r["plan"]["sym"] == tm_sym), None)
+    if tm_open:
+        st.info(T("Prefilled with the open {sym} trade from the signal board.", sym=tm_sym))
+        d_side, d_e, d_s = tm_open["side"], tm_open["entry"], tm_open.get("stop_now", tm_open["stop0"])
+        d_t = (tm_open.get("tps") or [(tm_open["entry"] + tm_open["side"] * 2 * abs(tm_open["entry"] - tm_open["stop0"]), 0, 0)])[0][0]
+    else:
+        d_side, d_e = 1, tm_px
+        d_s, d_t = tm_px - 1.5 * tm_atr, tm_px + 2.0 * tm_atr
+    step_ = 10 ** -tm_inst.digits
+    c1, c2, c3, c4 = st.columns(4)
+    tm_side = 1 if c1.segmented_control(T("Direction"), [T("BUY"), T("SELL")], default=T("BUY") if d_side == 1 else T("SELL"),
+                                        key="tm_side") == T("BUY") else -1
+    tm_e = c2.number_input(T("Entry"), value=float(round(d_e, tm_inst.digits)), step=step_ * 10, format=f"%.{tm_inst.digits}f", key="tm_e")
+    tm_s = c3.number_input(T("Stop loss"), value=float(round(d_s, tm_inst.digits)), step=step_ * 10, format=f"%.{tm_inst.digits}f", key="tm_s")
+    tm_t = c4.number_input(T("Target"), value=float(round(d_t, tm_inst.digits)), step=step_ * 10, format=f"%.{tm_inst.digits}f", key="tm_t")
+    tm_h = st.slider(T("Hours to replay"), 1, 48, 8, key="tm_h")
+    ok_geom = (tm_s < tm_e < tm_t) if tm_side == 1 else (tm_t < tm_e < tm_s)
+    if not ok_geom:
+        st.warning(T("For a buy the stop must be below the entry and the target above it (the other way round for a sell)."))
+    elif st.button(T("Run 10,000 replays"), type="primary", key="tm_run"):
+        res_ = timemachine.simulate(tm_c, tm_side, tm_e, tm_s, tm_t, horizon_bars=tm_h * 4)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(T("Target first"), f"{100 * res_['target_first']:.1f}%")
+        m2.metric(T("Stop first"), f"{100 * res_['stop_first']:.1f}%")
+        m3.metric(T("Neither in time"), f"{100 * res_['neither']:.1f}%")
+        m4.metric(T("Average result"), f"{res_['avg_r']:+.2f}R", help=T("R = your stop distance. Above 0 means this trade paid on average in the replays."))
+        fmt_ = lambda v: f"{v:,.{tm_inst.digits}f}"
+        fig_ = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45], subplot_titles=(T("Sample replays"), T("Where price ends")))
+        x_ = list(range(res_["paths"].shape[1]))
+        for p_ in res_["paths"]:
+            fig_.add_trace(go.Scatter(x=x_, y=p_, mode="lines", line=dict(width=0.6, color="rgba(77,216,255,.25)"),
+                                      showlegend=False, hoverinfo="skip"), row=1, col=1)
+        fig_.add_trace(go.Histogram(x=res_["closes"], nbinsx=40, marker_color="rgba(255,181,71,.75)", showlegend=False), row=1, col=2)
+        for lvl, nm, col_ in ((tm_s, "Stop", DOWN), (tm_e, "Entry", "#c9d6e8"), (tm_t, "Target", UP)):
+            fig_.add_hline(y=lvl, line=dict(color=col_, dash="dash", width=1), row=1, col=1,
+                           annotation_text=f"{T(nm)} {fmt_(lvl)}", annotation_font=dict(color=col_, size=10))
+            fig_.add_vline(x=lvl, line=dict(color=col_, dash="dash", width=1), row=1, col=2)
+        fig_.update_layout(height=380, paper_bgcolor=BG, plot_bgcolor="rgba(4,10,20,.55)", margin=dict(l=0, r=10, t=30, b=0),
+                           font=dict(color=MUTED, size=11))
+        fig_.update_xaxes(gridcolor=GRID)
+        fig_.update_yaxes(gridcolor=GRID)
+        st.plotly_chart(fig_, use_container_width=True)
+        st.caption(T("Risk:reward 1:{rr}. A high 'target first' with a far stop can still lose money on average - check the average result.",
+                     rr=f"{res_['rr']:.2f}"))
 
 
 def perf_card(title, r):
