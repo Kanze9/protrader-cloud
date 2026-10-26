@@ -131,11 +131,16 @@ def render(results) -> str:
     live = [r for r in ordered if r.get("open")]
     prices = " · ".join(f"{sym.replace('XAUUSD', 'GOLD')} {next((r['price'] for r in results if r['plan']['sym'] == sym and 'price' in r), 0):,.{INSTRUMENTS[sym].digits}f}"
                         for sym in ("EURUSD", "XAUUSD"))
-    secs = [f"<h2>{'SIGNALS NOW' if live else 'NO OPEN SIGNAL - WAITING'}</h2><div class='m'>{prices}</div>",
+    # APP_URL: the full app on Streamlit Cloud - the site opens it, and traderpro.gamer.free/?list keeps this list
+    app = (os.environ.get("APP_URL") or "").strip()
+    go = (f"<script>if(location.search.indexOf('list')<0)location.replace({json.dumps(app)});</script>" if app else "")
+    btn = (f"<a class='card' style='display:block;text-align:center;font-weight:700;color:#00e5ff;text-decoration:none' "
+           f"href='{app}'>OPEN THE FULL APP →</a>" if app else "")
+    secs = [btn, f"<h2>{'SIGNALS NOW' if live else 'NO OPEN SIGNAL - WAITING'}</h2><div class='m'>{prices}</div>",
             "".join(card(r) for r in ordered)]
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="300">
-<meta name="robots" content="noindex,nofollow"><title>ProTrader</title><style>{CSS}</style></head><body><div class="w">
+<meta name="robots" content="noindex,nofollow"><title>ProTrader</title>{go}<style>{CSS}</style></head><body><div class="w">
 <h1>◆ PROTRADER</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · data refreshes every hour<br>
 Most profitable first. ★★★ = earned the most in the 10-year test.</div>
 {''.join(secs)}

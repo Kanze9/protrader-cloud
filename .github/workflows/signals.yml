@@ -32,3 +32,4 @@ jobs:
           FTP_USER: ${{ secrets.FTP_USER || vars.FTP_USER }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || vars.FTP_PASSWORD }}
           PAGE_NAME: ${{ secrets.PAGE_NAME || vars.PAGE_NAME }}
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
