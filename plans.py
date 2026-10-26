@@ -27,8 +27,9 @@ PLANS = [
      "name": "Gold deep dip"},
     {"id": "gold_a15", "sym": "XAUUSD", "tf": "M15", "tier": "A", "kind": "mr", "strat": "mr_gold15", "peer": "EURUSD",
      "name": "Gold deep dip"},
-    {"id": "gold_pull", "sym": "XAUUSD", "tf": "H1", "tier": "B", "kind": "pull", "name": "Gold trend: EMA20 pullback buy"},
-    {"id": "gold_pro", "sym": "XAUUSD", "tf": "H1", "tier": "B", "kind": "pro", "name": "Gold trend: Pro Pullback"},
+    {"id": "gold_pull", "sym": "XAUUSD", "tf": "H1", "tier": "B", "kind": "pull", "name": "Gold trend pullback"},
+    # gold_pro (Pro Pullback, kind "pro") left the board 2026-10-27: weaker in the newer years (PF 1.22), 7/11 years up,
+    # often the opposite side of gold_pull, and it doubled the drawdown of the mix. The code below still supports it.
 ]
 TIER_TEXT = {"A": "A · high accuracy", "B": "B · trend trade (trailing stop)"}
 
@@ -41,29 +42,50 @@ def stats(plan: Dict) -> Optional[Dict]:
         return None
 
 
-# ---------------------------------------------------------------- tier B: gold EMA20 pullback (buys only)
+# ---------------------------------------------------------------- gold trend pullback (buys only)
+# 10y Dukascopy H1 gold, $0.25 cost, one trade at a time (research 2026-10-27):
+#   old rules (daily up, EMA20 > EMA50, dip to EMA20, stop 2 / trail 3 ATR)   778 trades, PF 1.34 (old 1.16, new 1.63), dd 20.5R
+#   + 4H trend up + London/New York hours 07-17 UTC                          533 trades, PF 1.61 (old 1.43, new 1.92), dd 12.8R
+#   + stop 1.5 / trail 3.5 ATR (middle of a plateau: every stop 1.5-2.5 x trail 2.5-4 profitable in both halves)
+#                                                                             499 trades, 34% win, PF 1.78 (old 1.55, new 2.15),
+#                                                                             +1.93R a month, dd 12.4R, 9 of 10 years up
+#   The entry timing is real: it beat all 40 runs of random entries with the same filters and exit (random PF ~1.43).
+#   Gold only: the same rule on 12 currency pairs and silver lost or broke even, and gold sells lost.
+#   Rejected: both sides, breakout entries (no extra profit, bigger drawdown), part-close at 1R, fixed 2R / 3R targets.
 
-PULL_STOP_ATR, PULL_TRAIL_ATR = 2.0, 3.0
+PULL_STOP_ATR, PULL_TRAIL_ATR = 1.5, 3.5
+PULL_HOURS = (7, 17)                       # UTC, candle open hour
+
+
+def add_h4_trend(d: pd.DataFrame, src: pd.DataFrame) -> None:
+    """t4 = +1 / -1 / 0: the last closed 4H candle (built from H1) has close > EMA50 > EMA200 (or the reverse)."""
+    h4 = add_indicators(src.resample("4h").agg(AGG).dropna())
+    t = pd.Series(np.where((h4.close > h4.ema50) & (h4.ema50 > h4.ema200), 1,
+                           np.where((h4.close < h4.ema50) & (h4.ema50 < h4.ema200), -1, 0)), index=h4.index + pd.Timedelta(hours=4))
+    d["t4"] = t.reindex(d.index, method="ffill").fillna(0).values
 
 
 def pull_prepare(h1: pd.DataFrame) -> pd.DataFrame:
     d = add_indicators(h1)
     meanrev.add_daily_trend(d)
+    add_h4_trend(d, h1)
     return d
 
 
 def pull_checks(d: pd.DataFrame, i: int) -> Dict:
     o, l, c = d.open.values, d.low.values, d.close.values
     e20, e50 = d.ema20.values, d.ema50.values
-    res = {"daily_up": d.dtrend.iloc[i] == 1, "ema_up": e20[i] > e50[i], "touch": l[i] <= e20[i],
+    hr = d.index[i].hour
+    res = {"daily_up": d.dtrend.iloc[i] == 1, "h4_up": d.t4.iloc[i] == 1, "ema_up": e20[i] > e50[i],
+           "session": PULL_HOURS[0] <= hr < PULL_HOURS[1], "touch": l[i] <= e20[i],
            "close_above": c[i] > e20[i], "bull": c[i] > o[i]}
     res["signal"] = all(res.values())
     return res
 
 
 def pull_trades(h1: pd.DataFrame, sym: str = "XAUUSD") -> List[Dict]:
-    """Daily uptrend + EMA20 above EMA50, a candle dips to EMA20 and closes bullish back above it -> buy at the close.
-    Stop 2xATR, then the stop trails 3xATR behind the best price (no fixed target). 10y gold: PF 1.34, ~41% win."""
+    """Daily + 4H uptrend, EMA20 above EMA50, London/New York hours: a candle dips to EMA20 and closes bullish back above
+    it -> buy at the close. Stop 1.5xATR, then the stop trails 3.5xATR behind the best price (no fixed target)."""
     d = pull_prepare(h1)
     c, h, l, a = d.close.values, d.high.values, d.low.values, d.atr.values
     cost = SPREADS.get(sym, 0)
@@ -85,6 +107,13 @@ def pull_trades(h1: pd.DataFrame, sym: str = "XAUUSD") -> List[Dict]:
             stop = max(stop, peak - PULL_TRAIL_ATR * a[j])
             path.append((d.index[j], stop))
         tr = {"i": i, "time": d.index[i], "side": 1, "entry": float(e), "stop0": float(e - R), "tier": "EMA20 pullback"}
+        if exit_i is None and i + 300 < n:                 # held 300 candles without the stop: close at the market
+            j = i + 299
+            tr.update(exit_i=j, exit=float(c[j]), exit_time=d.index[j], open=False, stop_now=float(stop),
+                      r=(c[j] - e - cost) / R, path=path)
+            out.append(tr)
+            i = j + 1
+            continue
         if exit_i is None:
             tr.update(exit_i=None, exit=None, exit_time=None, open=True, stop_now=float(stop),
                       r=(c[-1] - e) / R, open_r=(c[-1] - e) / R, path=path + [(d.index[-1], stop)])
@@ -136,7 +165,8 @@ def mr_meter(plan: Dict, m: Dict) -> Dict:
 
 
 def pull_meter(c: Dict) -> Dict:
-    return _meter("BUY", [("Daily uptrend (50-day average)", c["daily_up"], ""), ("EMA20 above EMA50 (H1)", c["ema_up"], ""),
+    return _meter("BUY", [("Daily uptrend (50-day average)", c["daily_up"], ""), ("4H uptrend (close > EMA50 > EMA200)", c["h4_up"], ""),
+                          ("EMA20 above EMA50 (H1)", c["ema_up"], ""), ("London / New York hours (07-17 UTC)", c["session"], ""),
                           ("Candle dipped to EMA20", c["touch"], ""), ("Closed back above EMA20", c["close_above"], ""),
                           ("Bullish candle", c["bull"], "")])
 

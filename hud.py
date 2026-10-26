@@ -49,6 +49,7 @@ h5 { font-family:'Orbitron','Inter','Microsoft YaHei',sans-serif; letter-spacing
 .hdr .sp { flex:1; }
 
 .verdict .act { font-family:'Orbitron','Inter','Microsoft YaHei',sans-serif; font-weight:800; font-size:1.9rem; letter-spacing:.08em; line-height:1.1; }
+@media (max-width: 640px) { .verdict .act { font-size:1.35rem !important; letter-spacing:.04em; } .verdict { padding:12px !important; } }
 .verdict .sub { font-size:.92rem; margin-top:6px; line-height:1.45; }
 .verdict table { width:100%; border-collapse:collapse; margin-top:12px; font-family:'JetBrains Mono'; font-size:.88rem; }
 .verdict td { padding:6px 0; border-bottom:1px dashed rgba(0,229,255,.12); }

@@ -81,7 +81,7 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
         rows.append(("Final exit", f(t.get("target_now", e)),
                      f"close the rest when a {tfname} candle closes back {'above' if buy else 'below'} the 5-candle average"))
     else:
-        rows.append(("Exit", "trailing stop", "no fixed TP: the stop follows 3×ATR behind the best price - move it up after "
+        rows.append(("Exit", "trailing stop", "no fixed TP: the stop follows 3.5×ATR behind the best price - move it up after "
                                               "each candle (the signal page shows the current stop)"))
         if stats:
             rows.append(("Typical", f"{stats['win']:.0f}% win", f"avg win {stats.get('avg_win', 0):+.1f}R · avg loss "

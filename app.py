@@ -1500,9 +1500,10 @@ REASONS = {
                "Price just made a deep, fast dip (RSI(2) under 2) - in an uptrend these usually bounce",
                "No news spike in the last 3 hours", "Not a break of the recent range",
                "Only gold moved, not the whole US dollar (EURUSD stayed calm)"],
-    "gold_pull": ["Gold's daily trend is up (above its 50-day average)",
+    "gold_pull": ["Gold's daily trend is up (above its 50-day average) and the 4-hour trend agrees",
                   "On the hourly chart the fast average (EMA20) is above the slow one (EMA50): the trend is up",
                   "Price pulled back to EMA20 and closed back above it with a strong candle - the trend is resuming",
+                  "Only during London / New York hours, when gold moves for real",
                   "No fixed target: the stop follows price up, so a big trend move can pay many times the risk"],
     "gold_pro": ["Gold's 4-hour and daily trends agree", "The market is trending (ADX at least 20) during active hours",
                  "Price pulled back to EMA20 and a confirmation candle closed in the trend direction",
@@ -1533,6 +1534,127 @@ def zones_card(S):
   </div>
   <div class='txt muted' style='font-size:12px;margin-top:8px'>{T('Zones = places where price turned several times before. Tested 10 years: price reacted at them no more often than at random levels, so use them as a map and for targets, not as signals.')}</div>
 </div>""", unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=3600)
+def plan_curves():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "plan_curves.json"), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def grow_account(trades, start_bal, risk):
+    """Compound the balance trade by trade at a fixed % risk; returns (times, balances, worst drop %)."""
+    bal, peak, dd, ts, bs = start_bal, start_bal, 0.0, [], []
+    for t_, r_ in trades:
+        bal *= 1 + risk / 100 * r_
+        peak = max(peak, bal)
+        dd = max(dd, 1 - bal / peak)
+        ts.append(t_)
+        bs.append(bal)
+    return ts, bs, 100 * dd
+
+
+def proof_card(res):
+    """10-year test of the plans on the board, as YOUR balance at YOUR risk %: growth curve, yearly results, worst drop."""
+    curves = plan_curves()
+    ids = [r["plan"]["id"] for r in res if r["plan"]["id"] in curves]
+    if not ids:
+        return
+    names = {r["plan"]["id"]: ("GOLD" if r["plan"]["sym"] == "XAUUSD" else r["plan"]["sym"]) + " · " + T(r["plan"]["name"]) +
+             (" (M15)" if r["plan"]["tf"] == "M15" else "") for r in res}
+    with st.expander("📈 " + T("10-year proof: what these signals would have done to your account"), expanded=False):
+        pick = st.multiselect(T("Signals to include"), ids, default=ids, format_func=lambda k: names.get(k, k), key="proof_pick")
+        if not pick:
+            return
+        tier = {r["plan"]["id"]: r["plan"]["tier"] for r in res}
+        c1, c2 = st.columns(2)
+        risk_b = c1.slider(T("Risk on trend signals %"), 0.25, 3.0, float(risk_pct), 0.25, key="proof_rb",
+                           help=T("Gold trend pullback: wins about 1 in 3, but the wins are big (trailing stop)."))
+        risk_a = c2.slider(T("Risk on high-accuracy signals %"), 0.25, 4.0, float(risk_pct), 0.25, key="proof_ra",
+                           help=T("Wins 83-91% of trades with small wins; in 10 years the worst run of losses was 1-4.4 risk units, so these can carry more risk."))
+        rk = lambda k: risk_a if tier.get(k) == "A" else risk_b
+        # scale each trade's R by its plan's risk, then compound at 1% per unit
+        rows = sorted((pd.Timestamp(t_), float(r_) * rk(k)) for k in pick for t_, r_ in curves[k])
+        ts, bs, dd = grow_account(rows, balance, 1.0)
+        years = max(0.5, (ts[-1] - ts[0]).days / 365.25)
+        cagr = (bs[-1] / balance) ** (1 / years) - 1
+        by_year = pd.Series(bs, index=pd.DatetimeIndex(ts)).groupby(lambda t_: t_.year).last()
+        prev = pd.concat([pd.Series([balance]), by_year.iloc[:-1]]).values
+        yr_pct = 100 * (by_year.values / prev - 1)
+        tiles = ((T("Start"), f"&#36;{balance:,.0f}", "#c9d6e8"), (T("After {y} years", y=f"{years:.0f}"), f"&#36;{bs[-1]:,.0f}", UP),
+                 (T("Per year"), f"{100 * cagr:+.0f}%", UP if cagr >= 0 else DOWN), (T("Worst drop"), f"-{dd:.0f}%", DOWN))
+        st.markdown("<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:6px 0 10px'>" +
+                    "".join(f"<div style='background:#0a1626;border:1px solid #16233a;border-radius:10px;padding:8px 12px'>"
+                            f"<div class='muted' style='font-size:12px'>{a_}</div><div class='mono' style='font-size:1.45rem;font-weight:700;"
+                            f"color:{c_}'>{b_}</div></div>" for a_, b_, c_ in tiles) + "</div>", unsafe_allow_html=True)
+        fig_ = go.Figure()
+        fig_.add_trace(go.Scatter(x=ts, y=bs, mode="lines", line=dict(color=UP, width=2), name=T("All picked signals"),
+                                  fill="tozeroy", fillcolor="rgba(0,229,192,.08)"))
+        for k in pick:
+            tk, bk, _ = grow_account([(pd.Timestamp(t_), float(r_)) for t_, r_ in curves[k]], balance, rk(k))
+            fig_.add_trace(go.Scatter(x=tk, y=bk, mode="lines", line=dict(width=1), name=names.get(k, k), opacity=.75))
+        fig_.update_layout(height=380, paper_bgcolor=BG, plot_bgcolor="rgba(4,10,20,.55)", margin=dict(l=0, r=10, t=10, b=0),
+                           font=dict(color=MUTED, size=11), legend=dict(orientation="h", y=-0.15),
+                           yaxis_type="log" if bs[-1] > 8 * balance else "linear")
+        fig_.update_xaxes(gridcolor=GRID)
+        fig_.update_yaxes(gridcolor=GRID, tickprefix="$")
+        st.plotly_chart(fig_, use_container_width=True, config={"displayModeBar": False})
+        cells = "".join(f"<td style='text-align:center;padding:4px 6px;color:{UP if v >= 0 else DOWN}'><div class='muted' style='font-size:11px'>{y_}</div>"
+                        f"<b class='mono'>{v:+.0f}%</b></td>" for y_, v in zip(by_year.index, yr_pct))
+        st.markdown(f"<div style='overflow-x:auto'><table style='width:100%'><tr>{cells}</tr></table></div>", unsafe_allow_html=True)
+        # the 0.01 minimum lot: below this balance the real risk is bigger than the slider says
+        need = 0.0
+        for r in res:
+            k = r["plan"]["id"]
+            last = next((t_ for t_ in reversed(r.get("trades") or []) if t_.get("stop0")), None)
+            if k in pick and last:
+                loss = abs(last["entry"] - last["stop0"]) * INSTRUMENTS[r["plan"]["sym"]].contract_size * 0.01
+                need = max(need, loss / (rk(k) / 100))
+        if need > balance:
+            st.markdown(f"<div class='txt' style='color:{hud.AMBER};margin-top:6px'>⚠ " +
+                        T("Your balance is below what the 0.01 minimum lot needs for this risk on every signal (about ${b}). "
+                          "The real risk per trade will be higher than the sliders say.", b=f"{need:,.0f}") +
+                        "</div>", unsafe_allow_html=True)
+        st.markdown("<div class='txt muted' style='font-size:12px;margin-top:6px'>" +
+                    T("Real 10-year history (Dukascopy prices, Pepperstone Razor costs), every closed trade of the picked signals, "
+                      "the balance compounded at the risk % above. Change the Balance in the sidebar. This is a test of the "
+                      "past, not a promise: real trading adds slippage, missed signals and emotions.") + "</div>", unsafe_allow_html=True)
+
+
+def recent_card(res):
+    """The latest signals of every plan on the live candles: when, side, entry, result in R and in $ at the sidebar risk."""
+    rows = []
+    for r in res:
+        p = r["plan"]
+        for t_ in (r.get("trades") or [])[-3:]:          # the last 3 of each plan, so busy plans don't hide the others
+            rows.append((t_["time"], p, t_))
+    if not rows:
+        return
+    rows.sort(key=lambda x: x[0], reverse=True)
+    closed_r = [t_["r"] for _, _, t_ in rows if not t_.get("open")]
+    usd = lambda r_: balance * risk_pct / 100 * r_
+    html_ = ""
+    for t0, p, t_ in rows:
+        inst_ = INSTRUMENTS[p["sym"]]
+        r_ = t_.get("open_r", t_["r"]) if t_.get("open") else t_["r"]
+        col = UP if r_ > 0 else DOWN if r_ < 0 else MUTED
+        side = (f"<b style='color:{UP if t_['side'] == 1 else DOWN}'>{T('BUY') if t_['side'] == 1 else T('SELL')}</b>")
+        res_txt = (f"<b style='color:{col}'>{r_:+.2f}R</b> <span class='muted'>({'+' if r_ >= 0 else '-'}&#36;{abs(usd(r_)):,.2f})</span>"
+                   + (f" <span style='color:{hud.AMBER}'>· {T('open')}</span>" if t_.get("open") else ""))
+        html_ += (f"<tr><td class='muted mono' style='white-space:nowrap'>{t0 + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]):%m-%d %H:%M}</td>"
+                  f"<td>{'GOLD' if p['sym'] == 'XAUUSD' else p['sym']} · {T(p['name'])}</td><td>{side}</td>"
+                  f"<td class='mono'>{t_['entry']:,.{inst_.digits}f}</td><td style='text-align:right;white-space:nowrap'>{res_txt}</td></tr>")
+    won = sum(1 for x in closed_r if x > 0)
+    summary = (T("Closed: {w} won, {l} lost, total {r}R ({u})", w=won, l=len(closed_r) - won, r=f"{sum(closed_r):+.2f}",
+                 u=f"{'+' if sum(closed_r) >= 0 else '-'}${abs(usd(sum(closed_r))):,.2f}") if closed_r else "")
+    with st.expander("🧾 " + T("Recent signals (live data) and how they ended"), expanded=False):
+        st.markdown(f"<div style='overflow-x:auto'><table style='width:100%;font-size:13px'>{html_}</table></div>"
+                    f"<div class='txt' style='margin-top:6px'>{summary}</div>"
+                    f"<div class='txt muted' style='font-size:12px'>{T('Same rules as the live signals, on the candles loaded now (about the last 6 months). $ = your balance x risk % x R.')}</div>",
+                    unsafe_allow_html=True)
 
 
 def simple_view(S=None):
@@ -1604,6 +1726,8 @@ def simple_view(S=None):
                  f"<td class='mono' style='text-align:right'>{status}</td></tr>")
     st.markdown(f"<div class='hud' style='margin-top:10px'><div class='hud-t'>{T('All signals · most profitable first')}</div>"
                 f"<table style='width:100%;font-size:14px'>{rows}</table></div>", unsafe_allow_html=True)
+    recent_card(res)
+    proof_card(res)
     if S is not None and "Strength zones" in layers:
         zones_card(S)
 
