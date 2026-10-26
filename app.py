@@ -25,6 +25,7 @@ import plans
 import proplan
 import quality
 import seasonal
+import orb_tool
 import timemachine
 import macro
 import news as newsmod
@@ -1765,8 +1766,101 @@ st.fragment(run_every=live_every if live else None)(market_panel)()
 
 sig = st.session_state.get(key)
 _tabs_box = st.expander(T("More tools · Time Machine, news, backtest, journal")) if simple else st
-t_an, t_tm, t_ctx, t_news, t_bt, t_scan, t_j = _tabs_box.tabs([T("Analysis"), T("Time Machine"), T("Market structure"),
+t_an, t_tm, t_orb, t_ctx, t_news, t_bt, t_scan, t_j = _tabs_box.tabs([T("Analysis"), T("Time Machine"), T("Opening range"),
+                                                                       T("Market structure"),
                                                          T("News & calendar"), T("Backtest"), T("Scanner"), T("Journal")])
+
+def fan_chart(candles, res_, side_, entry_, stop_, target_, bar_min, digits):
+    """Real candles, then the replay paths fanning out from the entry, with stop / entry / target lines."""
+    fmt_ = lambda v: f"{v:,.{digits}f}"
+    fig_ = go.Figure(go.Candlestick(x=candles.index, open=candles.open, high=candles.high, low=candles.low, close=candles.close,
+                                    increasing=dict(line=dict(color=UP, width=1), fillcolor=UP),
+                                    decreasing=dict(line=dict(color=DOWN, width=1), fillcolor=DOWN), showlegend=False))
+    t0 = candles.index[-1]
+    xs = [t0 + pd.Timedelta(minutes=bar_min * (k + 1)) for k in range(res_["paths"].shape[1])]
+    for p_ in res_["paths"]:
+        fig_.add_trace(go.Scatter(x=[t0] + xs, y=[entry_] + list(p_), mode="lines", hoverinfo="skip", showlegend=False,
+                                  line=dict(width=0.7, color="rgba(77,140,255,.28)")))
+    for lvl, nm, col_ in ((stop_, "Stop", DOWN), (entry_, "Entry", "#c9d6e8"), (target_, "Target", UP)):
+        fig_.add_hline(y=lvl, line=dict(color=col_, dash="dash", width=1.2),
+                       annotation_text=f"{T(nm)} {fmt_(lvl)}", annotation_position="right", annotation_font=dict(color=col_, size=11))
+    fig_.update_layout(height=430, paper_bgcolor=BG, plot_bgcolor="rgba(4,10,20,.55)", margin=dict(l=0, r=90, t=10, b=0),
+                       font=dict(color=MUTED, size=11), xaxis_rangeslider_visible=False)
+    fig_.update_xaxes(gridcolor=GRID)
+    fig_.update_yaxes(gridcolor=GRID, side="right", tickformat=f".{digits}f")
+    return fig_
+
+
+def outcome_bars(res_):
+    """'How the replays end' bars, like the video."""
+    rows_ = [(T("Target first"), res_["target_first"], UP), (T("Stop first"), res_["stop_first"], DOWN),
+             (T("Neither in time"), res_["neither"], "#8b949e")]
+    html_ = "".join(f"<div style='display:flex;align-items:center;gap:10px;margin:6px 0'><span class='txt' style='width:130px'>{n}</span>"
+                    f"<div style='flex:1;background:#16233a;border-radius:4px'><div style='width:{100 * v:.1f}%;background:{c};height:22px;"
+                    f"border-radius:4px'></div></div><b class='mono' style='width:60px;text-align:right'>{100 * v:.1f}%</b></div>"
+                    for n, v, c in rows_)
+    return (f"<div class='hud'><div class='hud-t'>{T('How the 10,000 replays end')}</div>{html_}"
+            f"<div class='txt muted' style='margin-top:6px'>{T('Average result')}: <b>{res_['avg_r']:+.2f}R</b> · "
+            f"{T('risk:reward')} 1:{res_['rr']:.2f}</div></div>")
+
+
+with t_orb:
+    st.markdown(f"<div class='hud-t'>{T('Opening-range breakout · watch the open')}</div>", unsafe_allow_html=True)
+    o1, o2, o3 = st.columns(3)
+    orb_sym = o1.segmented_control(T("Market"), ["XAUUSD", "EURUSD"], default="XAUUSD", key="orb_sym") or "XAUUSD"
+    orb_sess = o2.segmented_control(T("Session"), ["London", "New York"], default="New York", key="orb_sess") or "New York"
+    orb_min = o3.segmented_control(T("Range"), [15, 30], default=15, format_func=lambda m: f"{m} min", key="orb_min") or 15
+    orb_inst = INSTRUMENTS[orb_sym]
+    orb_m5 = get_candles(orb_sym, "M5", source)[0]
+    orb = orb_tool.opening_range(orb_m5, orb_sess, orb_min)
+    if not orb:
+        st.info(T("No session data yet."))
+    else:
+        f_o = lambda v: f"{v:,.{orb_inst.digits}f}"
+        tzs = orb["start"].tzname()
+        rule = (T("Close above") if orb["side"] >= 0 else T("Close below"))
+        timer = T(orb["status"]) + (f" · {orb['break_time']:%H:%M} {tzs}" if orb["break_time"] is not None else
+                                    f" · {T('since')} {orb['end']:%H:%M} {tzs}")
+        cards = [(T("Opening range high"), f_o(orb["high"]), f"{orb['start']:%H:%M} – {orb['end']:%H:%M} {tzs} · {T('low')} {f_o(orb['low'])}", "#c9d6e8"),
+                 (T("Entry rule"), rule, T("the range high (buy) or low (sell), 5-min candle close"), hud.AMBER),
+                 (T("Entry timer"), timer, f"{orb_sym} · {T(orb_sess)} {T('open')}", UP if orb["side"] == 1 else DOWN if orb["side"] == -1 else hud.CYAN)]
+        st.markdown("<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px'>" + "".join(
+            f"<div class='hud' style='margin:0;border-top:3px solid {c}'><div class='txt muted'>{a}</div>"
+            f"<div class='act mono' style='font-size:1.6rem'>{b}</div><div class='txt muted' style='font-size:12px'>{n}</div></div>"
+            for a, b, n, c in cards) + "</div>", unsafe_allow_html=True)
+        dc = orb["day_candles"]
+        fig_o = go.Figure(go.Candlestick(x=dc.index, open=dc.open, high=dc.high, low=dc.low, close=dc.close, showlegend=False,
+                                         increasing=dict(line=dict(color=UP, width=1), fillcolor=UP),
+                                         decreasing=dict(line=dict(color=DOWN, width=1), fillcolor=DOWN)))
+        fig_o.add_shape(type="rect", x0=orb["start"], x1=orb["end"], y0=orb["low"], y1=orb["high"],
+                        fillcolor="rgba(77,140,255,.18)", line=dict(color="rgba(77,140,255,.7)", width=1))
+        fig_o.add_hline(y=orb["high"], line=dict(color="#4d8cff", dash="dot"), annotation_text=f"{T('Range high')} {f_o(orb['high'])}")
+        fig_o.add_hline(y=orb["low"], line=dict(color="#4d8cff", dash="dot"), annotation_text=f"{T('Range low')} {f_o(orb['low'])}",
+                        annotation_position="bottom right")
+        if orb["break_time"] is not None:
+            fig_o.add_trace(go.Scatter(x=[orb["break_time"]], y=[orb["entry"]], mode="markers+text", showlegend=False,
+                                       marker=dict(symbol="triangle-up" if orb["side"] == 1 else "triangle-down", size=14,
+                                                   color=UP if orb["side"] == 1 else DOWN),
+                                       text=[T("BUY") if orb["side"] == 1 else T("SELL")], textposition="bottom center"))
+        fig_o.update_layout(height=380, paper_bgcolor=BG, plot_bgcolor="rgba(4,10,20,.55)", margin=dict(l=0, r=10, t=10, b=0),
+                            font=dict(color=MUTED, size=11), xaxis_rangeslider_visible=False)
+        fig_o.update_xaxes(gridcolor=GRID)
+        fig_o.update_yaxes(gridcolor=GRID, side="right", tickformat=f".{orb_inst.digits}f")
+        st.plotly_chart(fig_o, use_container_width=True)
+        if orb["side"]:
+            rr_o = st.select_slider(T("Target"), [1.0, 1.5, 2.0, 3.0], value=1.0, format_func=lambda v: f"{v:g}R", key="orb_rr")
+            R_o = abs(orb["entry"] - orb["stop"])
+            tgt_o = orb["entry"] + orb["side"] * rr_o * R_o
+            if st.button(T("Replay this breakout 10,000×"), type="primary", key="orb_run"):
+                hist_o = closed_only(orb_m5, "M5")
+                upto = hist_o[hist_o.index <= orb["break_time"]]
+                res_o = timemachine.simulate(upto, orb["side"], orb["entry"], orb["stop"], tgt_o,
+                                             horizon_bars=orb_tool.SESSION_HOURS * 12, lookback_bars=1500, block=6)
+                st.plotly_chart(fan_chart(upto.tail(40), res_o, orb["side"], orb["entry"], orb["stop"], tgt_o, 5, orb_inst.digits),
+                                use_container_width=True)
+                st.markdown(outcome_bars(res_o), unsafe_allow_html=True)
+        st.caption(T("Tested on 2 years of gold and EURUSD with costs: this breakout broke even or lost (profit factor 0.76-1.02). "
+                     "Use it to watch the open, not as a signal on its own."))
 
 with t_tm:
     st.markdown(f"<div class='hud-t'>{T('Time Machine · replay a trade 10,000 times')}</div>", unsafe_allow_html=True)
@@ -1800,27 +1894,15 @@ with t_tm:
         st.warning(T("For a buy the stop must be below the entry and the target above it (the other way round for a sell)."))
     elif st.button(T("Run 10,000 replays"), type="primary", key="tm_run"):
         res_ = timemachine.simulate(tm_c, tm_side, tm_e, tm_s, tm_t, horizon_bars=tm_h * 4)
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric(T("Target first"), f"{100 * res_['target_first']:.1f}%")
-        m2.metric(T("Stop first"), f"{100 * res_['stop_first']:.1f}%")
-        m3.metric(T("Neither in time"), f"{100 * res_['neither']:.1f}%")
-        m4.metric(T("Average result"), f"{res_['avg_r']:+.2f}R", help=T("R = your stop distance. Above 0 means this trade paid on average in the replays."))
-        fmt_ = lambda v: f"{v:,.{tm_inst.digits}f}"
-        fig_ = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45], subplot_titles=(T("Sample replays"), T("Where price ends")))
-        x_ = list(range(res_["paths"].shape[1]))
-        for p_ in res_["paths"]:
-            fig_.add_trace(go.Scatter(x=x_, y=p_, mode="lines", line=dict(width=0.6, color="rgba(77,216,255,.25)"),
-                                      showlegend=False, hoverinfo="skip"), row=1, col=1)
-        fig_.add_trace(go.Histogram(x=res_["closes"], nbinsx=40, marker_color="rgba(255,181,71,.75)", showlegend=False), row=1, col=2)
-        for lvl, nm, col_ in ((tm_s, "Stop", DOWN), (tm_e, "Entry", "#c9d6e8"), (tm_t, "Target", UP)):
-            fig_.add_hline(y=lvl, line=dict(color=col_, dash="dash", width=1), row=1, col=1,
-                           annotation_text=f"{T(nm)} {fmt_(lvl)}", annotation_font=dict(color=col_, size=10))
-            fig_.add_vline(x=lvl, line=dict(color=col_, dash="dash", width=1), row=1, col=2)
-        fig_.update_layout(height=380, paper_bgcolor=BG, plot_bgcolor="rgba(4,10,20,.55)", margin=dict(l=0, r=10, t=30, b=0),
-                           font=dict(color=MUTED, size=11))
-        fig_.update_xaxes(gridcolor=GRID)
-        fig_.update_yaxes(gridcolor=GRID)
-        st.plotly_chart(fig_, use_container_width=True)
+        st.plotly_chart(fan_chart(tm_c.tail(48), res_, tm_side, tm_e, tm_s, tm_t, 15, tm_inst.digits), use_container_width=True)
+        ob_, hist_ = st.columns([1, 1])
+        ob_.markdown(outcome_bars(res_), unsafe_allow_html=True)
+        fig_h = go.Figure(go.Histogram(x=res_["closes"], nbinsx=40, marker_color="rgba(255,140,90,.8)", showlegend=False))
+        for lvl, col_ in ((tm_s, DOWN), (tm_e, "#c9d6e8"), (tm_t, UP)):
+            fig_h.add_vline(x=lvl, line=dict(color=col_, dash="dash", width=1.2))
+        fig_h.update_layout(height=230, paper_bgcolor=BG, plot_bgcolor="rgba(4,10,20,.55)", margin=dict(l=0, r=10, t=30, b=0),
+                            font=dict(color=MUTED, size=11), title=dict(text=T("Where price ends"), font=dict(size=12)))
+        hist_.plotly_chart(fig_h, use_container_width=True)
         st.caption(T("Risk:reward 1:{rr}. A high 'target first' with a far stop can still lose money on average - check the average result.",
                      rr=f"{res_['rr']:.2f}"))
 
