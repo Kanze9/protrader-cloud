@@ -1540,13 +1540,21 @@ def zones_card(S):
 </div>""", unsafe_allow_html=True)
 
 
+CURVES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "plan_curves.json")
+
+
 @st.cache_data(ttl=3600)
-def plan_curves():
+def _plan_curves(mtime):
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "plan_curves.json"), encoding="utf-8") as fh:
+        with open(CURVES_PATH, encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def plan_curves():
+    """The 10-year trade list of every plan; re-read whenever build_plan_stats.py rewrites the file."""
+    return _plan_curves(os.path.getmtime(CURVES_PATH) if os.path.exists(CURVES_PATH) else 0)
 
 
 def grow_account(trades, start_bal, risk):
