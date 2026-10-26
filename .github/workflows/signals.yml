@@ -2,8 +2,8 @@ name: EURUSD signals
 
 on:
   schedule:
-    # 3 minutes after every hour (UTC), Sunday to Friday - the forex week. GitHub may start a few minutes late.
-    - cron: "3 * * * 0-5"
+    # GitHub often skips scheduled runs, so ask 3 times an hour (about 1,700 free minutes a month)
+    - cron: "3,23,43 * * * 0-5"
   workflow_dispatch: {}          # "Run workflow" button for a manual check
 
 concurrency:
