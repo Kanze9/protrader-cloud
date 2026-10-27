@@ -1870,6 +1870,7 @@ def market_panel():
         more = st.expander(T("Chart & full analysis"))
     else:
         signal_board()
+        now_card()
         more = st.container()
     with more:
 
