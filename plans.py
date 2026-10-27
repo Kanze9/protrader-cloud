@@ -204,6 +204,42 @@ def brk_trades(h1: pd.DataFrame, sym: str = "BTCUSD") -> List[Dict]:
     return out
 
 
+# ---------------------------------------------------------------- "buy or sell right now?" (quick trade lean)
+# For someone who opens the site and wants a side now, not the next tested signal. Four trend votes on closed H1 candles:
+# daily (close vs 50-day average), 4H (close>EMA50>EMA200), H1 (EMA20 vs EMA50), last 24 hours up or down.
+# 3+ votes the same way -> lean that way; stop 1.5xATR, target 1.5xATR (1:1), close after 24 hours if neither is hit.
+# Dukascopy H1 10 years, every hour a sample, costs included (research 2026-10-27): entering at a random hour loses
+# (PF 0.89-0.93); the lean is better than random but only about break-even - it is NOT one of the tested plans.
+NOW_STOP_ATR, NOW_HOLD = 1.5, 24
+NOW_NEED = 3
+NOW_STATS = {  # (side, sym): win %, average R per trade, random-entry win %
+    (1, "XAUUSD"): (43.5, 0.03, 40.7), (-1, "XAUUSD"): (41.0, -0.04, 40.7),
+    (1, "EURUSD"): (39.3, -0.08, 40.0), (-1, "EURUSD"): (42.8, 0.00, 40.0),
+    (1, "BTCUSD"): (44.1, 0.03, 41.0), (-1, "BTCUSD"): (41.5, -0.02, 41.0),
+}
+NOW_ACTIVE = {"XAUUSD": (7, 17), "EURUSD": (7, 17)}   # UTC hours with real moves (Bitcoin: all day)
+
+
+def now_lean(h1: pd.DataFrame, price: float, sym: str) -> Dict:
+    """Side, votes, stop and target for a quick trade at `price`, from the closed H1 candles."""
+    d = add_indicators(h1)
+    meanrev.add_daily_trend(d)
+    add_h4_trend(d, h1)
+    last = d.iloc[-1]
+    sg = lambda v: 0 if not np.isfinite(v) else int(np.sign(v))
+    votes = [("Daily trend (50-day average)", sg(last.dtrend)), ("4-hour trend", sg(last.t4)),
+             ("1-hour trend (EMA20 vs EMA50)", sg(last.ema20 - last.ema50)),
+             ("Last 24 hours", sg(last.close - d.close.iloc[-25]) if len(d) > 25 else 0)]
+    score = sum(v for _, v in votes)
+    side = 1 if score >= NOW_NEED else -1 if score <= -NOW_NEED else 0
+    dist = NOW_STOP_ATR * float(last.atr)
+    hrs = NOW_ACTIVE.get(sym)
+    hour = pd.Timestamp.now(tz="UTC").hour
+    return {"side": side, "score": score, "votes": votes, "price": float(price), "atr": float(last.atr),
+            "stop": price - side * dist if side else None, "target": price + side * dist if side else None,
+            "quiet": bool(hrs) and not (hrs[0] <= hour < hrs[1]), "stats": NOW_STATS.get((side, sym))}
+
+
 # ---------------------------------------------------------------- meters
 
 def _meter(side: str, items: List, note: str = "") -> Dict:

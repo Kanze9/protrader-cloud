@@ -1689,6 +1689,58 @@ def _years(s_):
         return 10
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def now_results(source_, bucket):
+    out = {}
+    for sym in ("XAUUSD", "EURUSD", "BTCUSD"):
+        try:
+            df = get_candles(sym, "H1", source_)[0]
+            out[sym] = plans.now_lean(closed_only(df, "H1"), float(df.close.iloc[-1]), sym)
+        except Exception as e:  # noqa: BLE001 - one market failing must not hide the others
+            out[sym] = {"error": str(e)}
+    return out
+
+
+def now_card():
+    """'Buy or sell right now?' - a quick trade lean with SL / TP for someone who wants a side this minute."""
+    res = now_results(source, int(time.time() // 60))
+    cards = ""
+    for sym, r in res.items():
+        name = {"XAUUSD": "GOLD", "BTCUSD": "BITCOIN"}.get(sym, sym)
+        if "error" in r:
+            cards += f"<div class='hud' style='margin:0'><b>{name}</b><div class='txt muted'>{T('No data')}</div></div>"
+            continue
+        inst_ = INSTRUMENTS[sym]
+        f_ = lambda v: f"{v:,.{inst_.digits}f}"
+        votes = "".join(f"<div class='txt' style='font-size:12px'>{'🟢' if v > 0 else '🔴' if v < 0 else '⚪'} {T(n)}</div>"
+                        for n, v in r["votes"])
+        if r["side"]:
+            buy = r["side"] == 1
+            col = UP if buy else DOWN
+            ps = position_size(sym, r["price"], r["stop"], balance, min(risk_pct, 0.5), int(leverage), lot_size)
+            win, avg, rnd = r["stats"]
+            rows = [(T("Entry now"), f_(r["price"])), (T("Stop loss"), f_(r["stop"])), (T("Take profit"), f_(r["target"])),
+                    (T("Lot"), f"{ps['lots']:.2f} · {T('risk')} &#36;{ps['risk_usd']:,.2f}")]
+            body = (f"<div class='act' style='font-size:1.6rem;color:{col}'>{T('BUY') if buy else T('SELL')} {name}</div>"
+                    f"<div class='txt muted' style='font-size:12px'>{T('{n} of 4 trends agree', n=abs(r['score']))}</div>"
+                    + "".join(f"<div style='display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #16233a'>"
+                              f"<span class='txt muted'>{a}</span><b class='mono'>{b}</b></div>" for a, b in rows)
+                    + f"<div class='txt muted' style='font-size:12px;margin-top:6px'>"
+                      f"{T('Close it after 24 hours if neither is hit.')} "
+                      f"{T('Tested 10 years: TP hit first {w}% of the time (random entry: {r}%), about {a}R per trade - close to break-even.', w=f'{win:.0f}', r=f'{rnd:.0f}', a=f'{avg:+.2f}')}</div>")
+        else:
+            body = (f"<div class='act' style='font-size:1.6rem;color:{hud.AMBER}'>{T('NO CLEAR SIDE')}</div>"
+                    f"<div class='txt muted' style='font-size:12px'>{T('Trends disagree - a trade now is a coin flip. Stay out.')}</div>")
+        quiet = (f"<div class='txt' style='font-size:12px;color:{hud.AMBER}'>⚠ {T('Quiet hours (outside London / New York) - moves are small.')}</div>"
+                 if r["quiet"] else "")
+        cards += f"<div class='hud' style='margin:0'><b>{name}</b> <span class='mono muted'>{f_(r['price'])}</span>{body}{quiet}{votes}</div>"
+    st.markdown(f"<div class='hud-t' style='margin:12px 0 6px'>⚡ {T('Buy or sell right now? (quick trade)')}</div>"
+                f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px'>{cards}</div>"
+                f"<div class='txt muted' style='font-size:12px;margin:6px 0 10px'>"
+                f"{T('This follows the trend for someone who wants to trade now. It is NOT one of the tested signals: in 10 years of tests it was only about break-even (a random entry loses). Risk at most 0.5% on it. The signal above is the profitable one.')}</div>",
+                unsafe_allow_html=True)
+
+
 def simple_view(S=None):
     """One big card: the most profitable signal now (or the closest one) with plain reasons, then a short ranked list."""
     res = [r for r in board_results(source, int(time.time() // 300)) if "error" not in r]
@@ -1749,6 +1801,7 @@ def simple_view(S=None):
   </div>
   <div class='txt muted' style='margin-top:10px;font-size:12px'>{tested}</div>
 </div>""", unsafe_allow_html=True)
+    now_card()
     rows = ""
     for r in res:
         pr, mr = r["plan"], r["meter"]
