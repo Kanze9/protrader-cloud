@@ -13,7 +13,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 350          # each run checks every 5 minutes for ~5.5 hours (public repo: minutes are free)
+    timeout-minutes: 350          # each run checks every 30 minutes for ~5.5 hours (public repo: minutes are free)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

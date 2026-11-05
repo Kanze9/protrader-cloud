@@ -15,7 +15,7 @@ from ftplib import FTP, error_perm
 import pandas as pd
 
 import alert_worker as aw
-from config import INSTRUMENTS, TIMEFRAMES
+from config import INSTRUMENTS, LOCAL_TZ, QUIET_HOURS, TIMEFRAMES
 from notify import both, email_ready, send_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -152,7 +152,7 @@ Testing / education only. Not financial advice.</div>
 
 
 def main():
-    """One check, or with LOOP_MINUTES set (GitHub): a check every 5 minutes for that long, because GitHub's own
+    """One check, or with LOOP_MINUTES set (GitHub): a check every 30 minutes for that long, because GitHub's own
     schedule often skips hours. The next scheduled run waits in the queue and takes over when this one ends."""
     loop = float(os.getenv("LOOP_MINUTES") or 0)
     if "--local" in sys.argv or not loop:
@@ -164,9 +164,9 @@ def main():
             check(state)
         except Exception as e:  # noqa: BLE001 - a data or FTP hiccup must not end the loop
             print("check failed:", e, flush=True)
-        if time.time() + 330 > end:
+        if time.time() + 1830 > end:
             break
-        time.sleep(300)
+        time.sleep(1800)
 
 
 def check(state=None):
@@ -174,7 +174,10 @@ def check(state=None):
     results = aw.run_all()
     if state is None:
         state = {} if local else load_state_ftp()
-    if email_ready() and (not local or "--email" in sys.argv):
+    quiet = QUIET_HOURS[0] <= pd.Timestamp.now(tz=LOCAL_TZ).hour < QUIET_HOURS[1]
+    if quiet and not local:
+        print("quiet hours - emails wait until", QUIET_HOURS[1], "o'clock")
+    elif email_ready() and (not local or "--email" in sys.argv):
         aw.check_once(state, send=send_email, results=results)
     elif not local:
         print("Gmail secrets missing - no emails this run")
