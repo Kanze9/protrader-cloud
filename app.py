@@ -313,12 +313,28 @@ def build_state(symbol, tf, source):
             "setups": setups or [], "events": events}
 
 
+def lt(ts):
+    """A time in the clock picked in the sidebar."""
+    ts = pd.Timestamp(ts)
+    return (ts.tz_localize("UTC") if ts.tzinfo is None else ts).tz_convert(TZ)
+
+
+def tzs(text):
+    """Swap 'UTC' in a (translated) sentence for the picked clock; '07-17 UTC' becomes those hours in it."""
+    a, b = lt(pd.Timestamp("2026-01-05 07:00", tz="UTC")), lt(pd.Timestamp("2026-01-05 17:00", tz="UTC"))
+    return text.replace("07-17 UTC", f"{a:%H}-{b:%H} {TZL}").replace("UTC", TZL)
+
+
 # ---------------------------------------------------------------- sidebar
 
 with st.sidebar:
     st.markdown("### ◆ PROTRADER AI")
     lang_name = st.segmented_control("🌐", list(i18n.LANGS), default="English", key="lang") or "English"
     i18n.set_lang(i18n.LANGS[lang_name])
+    TZS = {"UTC+8 (Ulaanbaatar / Beijing)": ("Asia/Shanghai", "UTC+8"), "UTC": ("UTC", "UTC"),
+           "New York": ("America/New_York", "NY"), "London": ("Europe/London", "London")}
+    TZ, TZL = TZS[st.selectbox("🕒 " + T("Time zone"), list(TZS), index=0,
+                               help=T("All times on this page are shown in this clock. UTC is world time; UTC+8 = UTC + 8 hours."))]
     simple = st.toggle(T("Simple view"), value=True, help=T("Only the most profitable signal and its reasons. Turn off for the full terminal."))
     symbol = st.selectbox(T("Instrument"), list(INSTRUMENTS), index=list(INSTRUMENTS).index("EURUSD"))
     tf = st.segmented_control(T("Timeframe"), list(TIMEFRAMES), default="M15") or "M15"
@@ -766,7 +782,7 @@ def verdict_html(sig, S):
     if created is not None and sig.get("valid_minutes"):
         until = created + timedelta(minutes=float(sig["valid_minutes"]))
         expired = pd.Timestamp.now(tz="UTC") > until
-        valid = (f"{T('EXPIRED') if expired else T('VALID UNTIL')} {until:%H:%M} UTC · {T('signal')} {created:%H:%M} "
+        valid = (f"{T('EXPIRED') if expired else T('VALID UNTIL')} {lt(until):%H:%M} {TZL} · {T('signal')} {lt(created):%H:%M} "
                  f"@ {fmt(sig.get('price_at_signal', 0), D)}")
     block = lambda lbl, txt: f"<div class='lbl'>{lbl}</div><div class='txt'>{txt}</div>" if txt else ""
     e = edge_for(get_backtest(symbol, tf)[0], sig.get("setup"))
@@ -890,8 +906,8 @@ def plan_base_signal(P):
         base.update(decision=side, entry=ot["entry"], stop_loss=ot.get("stop_now", ot["stop0"]), stop0=ot["stop0"],
                     open_r=ot.get("open_r", 0.0), since=str(ot["time"]),
                     fresh=ot["time"] == P["last_time"],
-                    summary=T("In a {side} trade since {t} UTC. The stop now trails at {s}.", side=T(side),
-                              t=f"{ot['time']:%m-%d %H:%M}", s=fmt(ot.get('stop_now', ot['stop0']), D)))
+                    summary=tzs(T("In a {side} trade since {t} UTC. The stop now trails at {s}.", side=T(side),
+                                  t=f"{lt(ot['time']):%m-%d %H:%M}", s=fmt(ot.get('stop_now', ot['stop0']), D))))
     else:
         base.update(decision="NO_TRADE", summary=plan_wait_text(P["checks"]))
     return base
@@ -981,15 +997,15 @@ def plan_verdict_html(sig, S, P):
         act = (T("BUY") if ot["side"] == 1 else T("SELL")) + f" <span class='mono'>{fmt(ot['entry'], D)}</span>" if fresh \
             else T("IN TRADE") + " · " + T(side)
         sub = T("New signal on the last closed candle.") if fresh else \
-            T("Open since {t} UTC · now {r}R", t=f"{ot['time'] + P.get('shift', pd.Timedelta(0)):%m-%d %H:%M}", r=f"{ot.get('open_r', 0):+.2f}")
+            tzs(T("Open since {t} UTC · now {r}R", t=f"{lt(ot['time'] + P.get('shift', pd.Timedelta(0))):%m-%d %H:%M}", r=f"{ot.get('open_r', 0):+.2f}"))
     else:
         act, color = T("WAIT"), hud.AMBER
         sub = plan_wait_text(P["checks"]) if P else ""
         last = P["trades"][-1] if P and P["trades"] else None
         if last:
-            sub += "<br>" + T("Last signal: {side} at {e} on {t} UTC → {r}R", side=T("BUY") if last["side"] == 1 else T("SELL"),
-                              e=fmt(last["entry"], D), t=f"{last['time'] + P.get('shift', pd.Timedelta(0)):%m-%d %H:%M}",
-                              r=f"{last['r']:+.2f}")
+            sub += "<br>" + tzs(T("Last signal: {side} at {e} on {t} UTC → {r}R", side=T("BUY") if last["side"] == 1 else T("SELL"),
+                                  e=fmt(last["entry"], D), t=f"{lt(last['time'] + P.get('shift', pd.Timedelta(0))):%m-%d %H:%M}",
+                                  r=f"{last['r']:+.2f}"))
     rows, extra = "", ""
     if ot:
         stop_now = ot.get("stop_now", ot["stop0"])
@@ -1029,8 +1045,8 @@ def plan_verdict_html(sig, S, P):
         soon = [x for x in newsmod.relevant_events(get_calendar(), symbol)
                 if x["impact"] == "High" and now - pd.Timedelta(minutes=15) <= x["time"] <= now + pd.Timedelta(minutes=60)]
         if soon:
-            msg = T("High-impact news at {t} UTC ({e}) - wait until it is out and the candle closes calm.",
-                    t=f"{soon[0]['time']:%H:%M}", e=soon[0].get("title", ""))
+            msg = tzs(T("High-impact news at {t} UTC ({e}) - wait until it is out and the candle closes calm.",
+                        t=f"{lt(soon[0]['time']):%H:%M}", e=soon[0].get("title", "")))
             extra += f"<div class='bad'>📰 {msg}</div>"
     if sig and sig.get("ai_decision") == "NO_TRADE" and ot and ot["time"] == P["last_time"]:
         extra += f"<div class='warn'>🧠 {T('DeepSeek suggests caution on this entry - read the analysis below.')}</div>"
@@ -1150,7 +1166,7 @@ def plan_checklist(S, P):
     if STRAT == "pro":
         items += [(T("4H trend clear (EMA50 vs EMA200)"), "ok" if chk["trend"] else "bad",
                    {1: T("LONG"), -1: T("SHORT"), 0: "—"}[chk["trend"]]),
-                  (T("Active session (07-17 UTC)"), "ok" if chk["session"] else "warn", ""),
+                  (tzs(T("Active session (07-17 UTC)")), "ok" if chk["session"] else "warn", ""),
                   (T("Trending market (ADX ≥ 20)"), "ok" if chk["adx_ok"] else "warn", f"{chk['adx']:.0f}"),
                   (T("Structure holds (EMA20 vs EMA50)"), "ok" if chk["structure"] else "warn", ""),
                   (T("Pulled back to EMA20"), "ok" if chk["pullback"] else "warn", ""),
@@ -1774,7 +1790,7 @@ def simple_view(S=None):
             lv.append((T("Target"), T("trailing stop - after each hourly candle, move your stop to the Stop loss shown here")))
         head = (f"<div class='act' style='font-size:2.3rem;color:{col};text-shadow:0 0 18px {col}66'>"
                 f"{T('BUY') if buy else T('SELL')} {market}</div>"
-                f"<div class='txt'>{T(p['name'])} · {T('signal since')} {t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]):%m-%d %H:%M} UTC · "
+                f"<div class='txt'>{T(p['name'])} · {T('signal since')} {lt(t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1])):%m-%d %H:%M} {TZL} · "
                 f"{T('now')} {t.get('open_r', 0):+.2f}R</div>")
         levels = "".join(f"<div style='display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #16233a'>"
                          f"<span class='txt muted'>{a}</span><b class='mono'>{b}</b></div>" for a, b in lv)
@@ -1848,7 +1864,8 @@ def market_panel():
     prev = S["frames"][tf]["close"].iloc[-2]
     chg = (live_px / prev - 1) * 100
     now = pd.Timestamp.now(tz="UTC")
-    cells = [("UTC / NY", f"{now:%H:%M} / {now.tz_convert('America/New_York'):%H:%M}")]
+    cells = [(f"{TZL} / UTC", f"{lt(now):%H:%M} / {now:%H:%M}") if TZ != "UTC" else
+             ("UTC / NY", f"{now:%H:%M} / {now.tz_convert('America/New_York'):%H:%M}")]
     sess, sstate = None, "na"
     if ctx is not None:
         q = ctx.session["quality"]
@@ -1879,7 +1896,7 @@ def market_panel():
                          src=S["src"].split(" (")[0]))
         danger = newsmod.upcoming_high_impact(S["events"], 60)
         if danger:
-            st.warning(T("High-impact news soon: ") + " · ".join(f"{e['time']:%H:%M} UTC {e['ccy']} {e['title']}" for e in danger))
+            st.warning(T("High-impact news soon: ") + " · ".join(f"{lt(e['time']):%H:%M} {TZL} {e['ccy']} {e['title']}" for e in danger))
         if guard["blocked"]:
             st.error(T("Risk guard: {why}. Signals are switched to WAIT for the rest of the day.", why=guard["why"]))
         if tf == "M5" and STRAT not in MR_TF:
@@ -2236,12 +2253,12 @@ with t_news:
             st.caption(T("No relevant headlines fetched."))
         for n in sym_news:
             dot = {"HIGH": DOWN, "MEDIUM": "#e3b341", "LOW": MUTED}[n["impact"]]
-            t = f"{n['time']:%d %b %H:%M}" if n["time"] else ""
+            t = f"{lt(n['time']):%d %b %H:%M}" if n["time"] else ""
             st.markdown(f"<span style='color:{dot}'>●</span> <a href='{n['link']}' style='color:#c5ccd6;text-decoration:none'>"
-                        f"{n['title']}</a><br><span class='small'>{n['source']} · {t} UTC</span>", unsafe_allow_html=True)
+                        f"{n['title']}</a><br><span class='small'>{n['source']} · {t} {TZL}</span>", unsafe_allow_html=True)
     with r:
         if events:
-            st.dataframe(pd.DataFrame([{"UTC": f"{e['time']:%a %H:%M}", T("Ccy"): e["ccy"], T("Impact"): e["impact"],
+            st.dataframe(pd.DataFrame([{TZL: f"{lt(e['time']):%a %H:%M}", T("Ccy"): e["ccy"], T("Impact"): e["impact"],
                                         T("Event"): e["title"], T("Fcst"): e["forecast"], T("Prev"): e["previous"],
                                         T("Actual"): e.get("actual", "")} for e in events]),
                          hide_index=True, use_container_width=True, height=520)

@@ -16,7 +16,7 @@ import pandas as pd
 
 import alert_worker as aw
 from config import INSTRUMENTS, TIMEFRAMES
-from notify import email_ready, send_email
+from notify import both, email_ready, send_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COST_NOTE = {"EURUSD": "assumes ~0.9 pip cost (Razor)", "XAUUSD": "assumes ~$0.25/oz cost (Razor)",
@@ -92,7 +92,7 @@ def card(res: dict) -> str:
     if t:
         buy = t["side"] == 1
         e, s0 = t["entry"], t["stop0"]
-        rows = [("Entry", fmt(e), f"{t['time'] + pd.Timedelta(minutes=mins):%m-%d %H:%M} UTC"),
+        rows = [("Entry", fmt(e), both(t['time'] + pd.Timedelta(minutes=mins))),
                 ("Stop now", fmt(t.get("stop_now", s0)), f"started at {fmt(s0)} (-{dist(s0, e)})")]
         for k, ((v, _, pct), hit) in enumerate(zip(t.get("tps") or [], t.get("tp_hit") or []), 1):
             note = "HIT ✓" if hit else f"{pct}% of past trades reached it"
@@ -143,7 +143,7 @@ def render(results) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="300">
 <meta name="robots" content="noindex,nofollow"><title>ProTrader</title>{go}<style>{CSS}</style></head><body><div class="w">
-<h1>◆ PROTRADER</h1><div class="m">Updated {now:%Y-%m-%d %H:%M} UTC · data refreshes every hour<br>
+<h1>◆ PROTRADER</h1><div class="m">Updated {both(now, '%Y-%m-%d %H:%M')} · data refreshes every hour<br>
 Most profitable first. ★★★ = earned the most in the 10-year test.</div>
 {''.join(secs)}
 <div class="card m">The bar shows how close each signal is: a signal comes only when it is full. Practise on a demo account first.

@@ -61,6 +61,7 @@ MTF_STACK = {
 }
 
 # Candles to load per timeframe (intraday needs enough for previous-day levels and VWAP)
+LOCAL_TZ, LOCAL_TZ_LABEL = "Asia/Shanghai", "UTC+8"      # the trader's clock (Ulaanbaatar / Beijing) in emails and the page
 BARS = {"M5": 1200, "M15": 2000, "H1": 3000, "H4": 500, "D1": 400}
 
 # Typical Pepperstone Razor all-in cost (spread + commission) in price units.

@@ -532,6 +532,8 @@ S.update({
     '1-hour trend (EMA20 vs EMA50)': ('1 цагийн тренд (EMA20 ба EMA50)', '1 小时趋势（EMA20 对 EMA50）'),
     'Last 24 hours': ('Сүүлийн 24 цаг', '最近 24 小时'),
     'This follows the trend for someone who wants to trade now. It is NOT one of the tested signals: in 10 years of tests it was only about break-even (a random entry loses). Risk at most 0.5% on it. The signal above is the profitable one.': ('Энэ нь одоо арилжаа хийх хүнд зориулж трендийг дагана. Энэ нь туршсан сигнал БИШ: 10 жилийн туршилтад бараг ашиггүй гарсан (санамсаргүй орох алдагдалтай). Үүн дээр дээд тал нь 0.5% эрсдэл ав. Дээрх сигнал л ашигтай нь.', '这只是给想马上交易的人顺着趋势的建议，不是经过测试的信号：10 年测试只是大约不赚不亏（随机入场会亏）。最多只冒 0.5% 风险。上面的信号才是赚钱的。'),
+    'Time zone': ('Цагийн бүс', '时区'),
+    'All times on this page are shown in this clock. UTC is world time; UTC+8 = UTC + 8 hours.': ('Энэ хуудасны бүх цаг энэ цагаар харагдана. UTC бол дэлхийн цаг; UTC+8 = UTC + 8 цаг.', '本页所有时间都按这个时区显示。UTC 是世界标准时间；UTC+8 = UTC 加 8 小时（北京 / 乌兰巴托时间）。'),
     "Lots (size 100000)": ("Лот (хэмжээ 100000)", "手数（每手 100000）"),
     "Your trade size, like the TradingView order panel. 0 = let the app size it from your balance and risk %.":
         ("Таны арилжааны хэмжээ, TradingView-ийн захиалгын самбар шиг. 0 = үлдэгдэл ба эрсдэлийн %-аас апп тооцно.",

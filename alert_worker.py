@@ -15,7 +15,7 @@ import news as newsmod
 import plans
 from config import BARS, INSTRUMENTS, TIMEFRAMES
 from data_feed import load_ohlc, load_tv_pair
-from notify import alert_lot, email_ready, send_email, signal_email, update_email
+from notify import both, alert_lot, email_ready, send_email, signal_email, update_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "models", "alert_state.json")
@@ -106,7 +106,7 @@ def check_plan(st, res, send):
                 subject, text, html_body = entry_mail(res, t)
                 if t["time"] < fresh_from:          # the check ran late (GitHub skipped runs): say so
                     f = lambda v: f"{v:,.{INSTRUMENTS[p['sym']].digits}f}"
-                    note = (f"LATE ALERT: this signal started at {t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]):%m-%d %H:%M} UTC. "
+                    note = (f"LATE ALERT: this signal started at {both(t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]))}. "
                             f"Price now {f(res['price'])}, stop now {f(t.get('stop_now', t['stop0']))}. "
                             f"Only enter if the price is still close to the entry {f(t['entry'])}.")
                     subject, text = "[LATE] " + subject, note + "\n\n" + text

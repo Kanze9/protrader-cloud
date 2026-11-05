@@ -26,6 +26,14 @@ def alert_lot() -> float:
         return 0.02
 
 
+def both(ts, f: str = "%m-%d %H:%M") -> str:
+    """'14:00 UTC = 22:00 UTC+8' - the market's clock and the trader's own."""
+    from config import LOCAL_TZ, LOCAL_TZ_LABEL
+    ts = pd.Timestamp(ts)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    return f"{ts.tz_convert(LOCAL_TZ):{f}} {LOCAL_TZ_LABEL} ({ts.tz_convert('UTC'):%H:%M} UTC)"
+
+
 def send_email(subject: str, text: str, html_body: Optional[str] = None) -> None:
     user, pw = os.getenv("GMAIL_USER", "").strip(), os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
     if not user or not pw:
@@ -69,7 +77,7 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
     label = f"[{tier}] {(plan or {}).get('name', '')}".strip()
     rows = [("Plan", label, "high accuracy" if tier == "A" else "trend trade: wins less often, wins are bigger"),
             ("Direction", side, t.get("tier") or ""),
-            ("Entry", f(e), f"enter now at market ({tfname} candle closed {when:%Y-%m-%d %H:%M} UTC)"),
+            ("Entry", f(e), f"enter now at market ({tfname} candle closed {both(when)})"),
             ("Stop loss", f(s0), f"-{dist(s0)} · -${pips(s0) * pip_usd:,.2f}")]
     for k, (v, lv, pct) in enumerate(t.get("tps") or [], 1):
         note = f"+{dist(v)} · +${pips(v) * pip_usd:,.2f} · {pct}% of past trades reached it"
@@ -98,7 +106,7 @@ def signal_email(sym: str, t: Dict, stats: Optional[Dict], lot: float, news: Lis
               f" (older {stats.get('pf_train', 0):.2f} / newer {stats.get('pf_test', 0):.2f}). "
               f"Assumes {'~$0.25/oz' if sym == 'XAUUSD' else '~0.04% of price' if sym == 'BTCUSD' else '~0.9 pip'} cost."
               if stats else "")
-    news_txt = "; ".join(f"{n['time']:%H:%M} UTC {n.get('ccy', '')} {n.get('title', '')}" for n in news)
+    news_txt = "; ".join(f"{both(n['time'], '%H:%M')} {n.get('ccy', '')} {n.get('title', '')}" for n in news)
     warn = f"HIGH-IMPACT NEWS SOON: {news_txt} - wait until it is out." if news else "No high-impact news in the next hour."
     subject = (f"ProTrader [{tier}] · {('BUY' if buy else 'SELL')} {sym} @ {f(e)} · SL {f(s0)} · "
                + (f"TP1 {f(t['tps'][0][0])}" if t.get("tps") else "trailing stop"))
