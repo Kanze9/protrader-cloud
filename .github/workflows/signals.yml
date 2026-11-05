@@ -34,3 +34,4 @@ jobs:
           PAGE_NAME: ${{ secrets.PAGE_NAME || vars.PAGE_NAME }}
           APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
           LOOP_MINUTES: "330"
+          PYTHONUNBUFFERED: "1"        # show each check in the log as it happens
