@@ -85,6 +85,9 @@ def entry_mail(res: dict, t: dict):
     return signal_email(p["sym"], t, res["stats"], alert_lot(), news_soon(p["sym"]), tf_minutes=TIMEFRAMES[p["tf"]][1], plan=p)
 
 
+LATE_OK = pd.Timedelta(hours=24)       # a still-open trade first seen this late is emailed, marked LATE
+
+
 def check_plan(st, res, send):
     """Email new entries / TP1 hits / exits of one plan once each."""
     p = res["plan"]
@@ -99,8 +102,16 @@ def check_plan(st, res, send):
         tid = str(t["time"])
         info = sent.get(tid)
         if info is None:
-            if t["time"] >= fresh_from and t.get("open"):
-                send(*entry_mail(res, t))
+            if t.get("open") and t["time"] >= res["time"] - LATE_OK:
+                subject, text, html_body = entry_mail(res, t)
+                if t["time"] < fresh_from:          # the check ran late (GitHub skipped runs): say so
+                    f = lambda v: f"{v:,.{INSTRUMENTS[p['sym']].digits}f}"
+                    note = (f"LATE ALERT: this signal started at {t['time'] + pd.Timedelta(minutes=TIMEFRAMES[p['tf']][1]):%m-%d %H:%M} UTC. "
+                            f"Price now {f(res['price'])}, stop now {f(t.get('stop_now', t['stop0']))}. "
+                            f"Only enter if the price is still close to the entry {f(t['entry'])}.")
+                    subject, text = "[LATE] " + subject, note + "\n\n" + text
+                    html_body = f"<p style='color:#b45309;font-weight:bold'>{note}</p>" + (html_body or "")
+                send(subject, text, html_body)
                 log.info("sent entry %s %s %s", p["id"], tid, t["side"])
             sent[tid] = {"tp1": t.get("tp1_time") is not None, "closed": not t.get("open")}
             continue

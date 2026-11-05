@@ -9,6 +9,7 @@ import io
 import json
 import os
 import sys
+import time
 from ftplib import FTP, error_perm
 
 import pandas as pd
@@ -151,9 +152,28 @@ Testing / education only. Not financial advice.</div>
 
 
 def main():
+    """One check, or with LOOP_MINUTES set (GitHub): a check every 5 minutes for that long, because GitHub's own
+    schedule often skips hours. The next scheduled run waits in the queue and takes over when this one ends."""
+    loop = float(os.getenv("LOOP_MINUTES") or 0)
+    if "--local" in sys.argv or not loop:
+        return check()
+    end = time.time() + loop * 60
+    state = load_state_ftp()
+    while True:
+        try:
+            check(state)
+        except Exception as e:  # noqa: BLE001 - a data or FTP hiccup must not end the loop
+            print("check failed:", e, flush=True)
+        if time.time() + 330 > end:
+            break
+        time.sleep(300)
+
+
+def check(state=None):
     local = "--local" in sys.argv
     results = aw.run_all()
-    state = {} if local else load_state_ftp()
+    if state is None:
+        state = {} if local else load_state_ftp()
     if email_ready() and (not local or "--email" in sys.argv):
         aw.check_once(state, send=send_email, results=results)
     elif not local:
@@ -167,7 +187,7 @@ def main():
         print("Page written to", out)
         return
     upload_ftp(page, state)
-    print("Page and state uploaded:", ", ".join(
+    print(pd.Timestamp.now(tz="UTC").strftime("%H:%M"), "page and state uploaded:", ", ".join(
         f"{r['plan']['id']} {'ERROR' if 'error' in r else 'IN TRADE' if r['open'] else 'wait'}" for r in results))
 
 

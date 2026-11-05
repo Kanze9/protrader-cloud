@@ -2,7 +2,7 @@ name: EURUSD signals
 
 on:
   schedule:
-    # GitHub often skips scheduled runs, so ask twice an hour, every day (Bitcoin trades at weekends; ~1,460 free minutes a month)
+    # GitHub often skips scheduled runs; each run loops for hours, and a queued run takes over when it ends
     - cron: "3,33 * * * *"
   workflow_dispatch: {}          # "Run workflow" button for a manual check
 
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350          # each run checks every 5 minutes for ~5.5 hours (public repo: minutes are free)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -33,3 +33,4 @@ jobs:
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || vars.FTP_PASSWORD }}
           PAGE_NAME: ${{ secrets.PAGE_NAME || vars.PAGE_NAME }}
           APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          LOOP_MINUTES: "330"
