@@ -88,8 +88,19 @@ def entry_mail(res: dict, t: dict):
 LATE_OK = pd.Timedelta(hours=24)       # a still-open trade first seen this late is emailed, marked LATE
 
 
+def _try(send, *mail) -> bool:
+    """Send one alert; a failure is logged and retried on the next check instead of stopping the others."""
+    try:
+        send(*mail)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("alert not sent (%s: %s) - will retry", type(e).__name__, e)
+        print("alert not sent:", type(e).__name__, e, flush=True)
+        return False
+
+
 def check_plan(st, res, send):
-    """Email new entries / TP1 hits / exits of one plan once each."""
+    """Email new entries / TP1 hits / exits of one plan once each (a failed send is retried next check)."""
     p = res["plan"]
     if "entries" in st:                                           # oldest format: EURUSD only
         st.setdefault("EURUSD", {})["entries"] = st.pop("entries")
@@ -111,16 +122,19 @@ def check_plan(st, res, send):
                             f"Only enter if the price is still close to the entry {f(t['entry'])}.")
                     subject, text = "[LATE] " + subject, note + "\n\n" + text
                     html_body = f"<p style='color:#b45309;font-weight:bold'>{note}</p>" + (html_body or "")
-                send(subject, text, html_body)
+                if not _try(send, subject, text, html_body):
+                    continue
                 log.info("sent entry %s %s %s", p["id"], tid, t["side"])
             sent[tid] = {"tp1": t.get("tp1_time") is not None, "closed": not t.get("open")}
             continue
         if t.get("tp1_time") is not None and not info["tp1"]:
-            send(*update_email(p["sym"], t, "tp1", p))
+            if not _try(send, *update_email(p["sym"], t, "tp1", p)):
+                continue
             info["tp1"] = True
             log.info("sent tp1 %s %s", p["id"], tid)
         if not t.get("open") and not info["closed"]:
-            send(*update_email(p["sym"], t, "closed", p))
+            if not _try(send, *update_email(p["sym"], t, "closed", p)):
+                continue
             info["closed"] = True
             log.info("sent close %s %s %+.2fR", p["id"], tid, t["r"])
 
