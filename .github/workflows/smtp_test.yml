@@ -1,0 +1,32 @@
+name: Gmail connection test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Log in to Gmail (no email is sent)
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER || vars.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD || vars.GMAIL_APP_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os, smtplib, ssl, socket
+          u = os.environ["GMAIL_USER"].strip(); p = os.environ["GMAIL_APP_PASSWORD"].replace(" ", "").strip()
+          print("user length", len(u), "password length", len(p))
+          for name, port in (("SSL 465", 465), ("STARTTLS 587", 587)):
+              try:
+                  if port == 465:
+                      s = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context(), timeout=30)
+                  else:
+                      s = smtplib.SMTP("smtp.gmail.com", 587, timeout=30); s.starttls(context=ssl.create_default_context())
+                  s.login(u, p); print(name, "LOGIN OK"); s.quit()
+              except Exception as e:
+                  print(name, "FAILED", type(e).__name__, str(e)[:200])
+          PY
