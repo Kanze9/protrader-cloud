@@ -33,5 +33,6 @@ jobs:
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || vars.FTP_PASSWORD }}
           PAGE_NAME: ${{ secrets.PAGE_NAME || vars.PAGE_NAME }}
           APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           LOOP_MINUTES: "330"
           PYTHONUNBUFFERED: "1"        # show each check in the log as it happens

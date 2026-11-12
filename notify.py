@@ -1,4 +1,5 @@
-"""Gmail alerts: send an email, and turn a plan trade into an email with entry, SL, TP1-3 and the exit rule."""
+"""Alerts: a phone push (ntfy.sh, when NTFY_TOPIC is set) or a Gmail email, and turn a plan trade into an alert
+with entry, SL, TP1-3 and the exit rule. GitHub's servers cannot reach Gmail, so the cloud uses the push."""
 import html
 import os
 import smtplib
@@ -7,6 +8,7 @@ from email.message import EmailMessage
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 
 from config import INSTRUMENTS
@@ -17,6 +19,37 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 def email_ready() -> bool:
     return bool(os.getenv("GMAIL_USER") and os.getenv("GMAIL_APP_PASSWORD"))
+
+
+def push_ready() -> bool:
+    return bool(os.getenv("NTFY_TOPIC", "").strip())
+
+
+def alerts_ready() -> bool:
+    return push_ready() or email_ready()
+
+
+def send_push(subject: str, text: str, html_body: Optional[str] = None) -> None:
+    """Phone notification through ntfy.sh: the ntfy app subscribed to the private topic name shows it at once."""
+    late, test = subject.startswith("[LATE]"), subject.startswith("[TEST]")
+    body = {"topic": os.getenv("NTFY_TOPIC", "").strip(), "title": subject[:200], "message": text[:3800],
+            "priority": 3 if late or test else 4, "tags": ["chart_with_upwards_trend"]}
+    if os.getenv("APP_URL"):
+        body["click"] = os.getenv("APP_URL")
+    r = requests.post("https://ntfy.sh/", json=body, timeout=20)
+    r.raise_for_status()
+
+
+def send_alert(subject: str, text: str, html_body: Optional[str] = None) -> None:
+    """The push when it is set up (an email too when Gmail works, never blocking the push); otherwise the email."""
+    if not push_ready():
+        return send_email(subject, text, html_body)
+    send_push(subject, text, html_body)
+    if email_ready() and os.getenv("GITHUB_ACTIONS") != "true":     # GitHub cannot reach Gmail
+        try:
+            send_email(subject, text, html_body)
+        except Exception:  # noqa: BLE001 - the push already went out
+            pass
 
 
 def alert_lot() -> float:

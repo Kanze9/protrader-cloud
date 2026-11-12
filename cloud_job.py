@@ -16,7 +16,7 @@ import pandas as pd
 
 import alert_worker as aw
 from config import INSTRUMENTS, LOCAL_TZ, QUIET_HOURS, TIMEFRAMES
-from notify import both, email_ready, send_email
+from notify import alerts_ready, both, send_alert
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COST_NOTE = {"EURUSD": "assumes ~0.9 pip cost (Razor)", "XAUUSD": "assumes ~$0.25/oz cost (Razor)",
@@ -177,10 +177,10 @@ def check(state=None):
     quiet = QUIET_HOURS[0] <= pd.Timestamp.now(tz=LOCAL_TZ).hour < QUIET_HOURS[1]
     if quiet and not local:
         print("quiet hours - emails wait until", QUIET_HOURS[1], "o'clock")
-    elif email_ready() and (not local or "--email" in sys.argv):
-        aw.check_once(state, send=send_email, results=results)
+    elif alerts_ready() and (not local or "--email" in sys.argv):
+        aw.check_once(state, send=send_alert, results=results)
     elif not local:
-        print("Gmail secrets missing - no emails this run")
+        print("no NTFY_TOPIC or Gmail secrets - no alerts this run")
     page = render(results)
     if local:
         os.makedirs(os.path.join(HERE, "site"), exist_ok=True)

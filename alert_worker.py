@@ -15,7 +15,7 @@ import news as newsmod
 import plans
 from config import BARS, INSTRUMENTS, TIMEFRAMES
 from data_feed import load_ohlc, load_tv_pair
-from notify import both, alert_lot, email_ready, send_email, signal_email, update_email
+from notify import alerts_ready, both, alert_lot, send_alert, signal_email, update_email
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "models", "alert_state.json")
@@ -153,7 +153,7 @@ def run_all(get=None):
 
 
 def check_once(st, send=None, results=None):
-    send = send or send_email
+    send = send or send_alert
     for res in results or run_all():
         if "error" not in res:
             check_plan(st, res, send)
@@ -171,10 +171,10 @@ def main():
     if "--test" in sys.argv:
         res = plans.run_plan(plans.PLANS[0], make_getter())
         subject, text, html_body = entry_mail(res, res["trades"][-1])
-        send_email("[TEST] " + subject, "This is a test with the latest signal.\n\n" + text, html_body)
+        send_alert("[TEST] " + subject, "This is a test with the latest signal.\n\n" + text, html_body)
         print("Test email sent to", os.getenv("ALERT_EMAIL_TO") or os.getenv("GMAIL_USER"))
         return
-    if not email_ready():
+    if not alerts_ready():
         raise SystemExit("Gmail is not set up - run:  .venv\\Scripts\\python set_email.py")
     st = load_state() or {}
     print("Gmail alerts running for", len(plans.PLANS), "plans (checks every 60 s). Close this window to stop.")
